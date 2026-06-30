@@ -1,0 +1,2396 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-50 dark:bg-slate-900">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Indian Navy Ship Acquisition PMIS</title>
+    <!-- Tailwind CSS (Offline) -->
+    <script src="assets/tailwind.min.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        navy: {
+                            50: '#f0f7ff',
+                            100: '#e0effe',
+                            200: '#bbf7d0',
+                            300: '#7dd3fc',
+                            400: '#38bdf8',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            800: '#075985',
+                            900: '#0c4a6e',
+                            950: '#082f49',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- FontAwesome Icons (Offline) -->
+    <link rel="stylesheet" href="assets/fontawesome/css/all.min.css">
+    <!-- Custom Stylesheet (Offline) -->
+    <link rel="stylesheet" href="assets/custom.css">
+    <style>
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        /* Custom scrollbar for clean UI */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        .dark ::-webkit-scrollbar-thumb {
+            background: #475569;
+        }
+    </style>
+</head>
+<body class="h-full text-slate-800 dark:text-slate-100 transition-colors duration-200">
+    <!-- Main App Container -->
+    <div id="app" class="h-full flex flex-col">
+        <!-- Views will be dynamically loaded here -->
+    </div>
+
+    <!-- Main Application JavaScript -->
+    <script>
+        // State Store
+        const store = {
+            token: localStorage.getItem('pmis_token') || '',
+            user: JSON.parse(localStorage.getItem('pmis_user')) || null,
+            currentView: 'login', // login, dashboard, template-builder, project-view
+            currentProjectId: null,
+            theme: localStorage.getItem('pmis_theme') || 'light',
+            
+            // Cached data
+            projects: [],
+            templates: [],
+            dashboardSummary: null,
+            currentProject: null,
+            currentActivities: [],
+            ganttData: null,
+            predictions: null,
+            predictionHistory: []
+        };
+
+        const API_BASE = window.location.origin;
+
+        // API Client wrapper
+        async function apiRequest(endpoint, method = 'GET', body = null) {
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            if (store.token) {
+                headers['Authorization'] = `Bearer ${store.token}`;
+            }
+
+            const config = {
+                method,
+                headers
+            };
+
+            if (body && method !== 'GET') {
+                config.body = JSON.stringify(body);
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`, config);
+                if (response.status === 401) {
+                    logout();
+                    throw new Error("Session expired. Please log in again.");
+                }
+                if (!response.ok) {
+                    const errData = await response.json().catch(() => ({}));
+                    throw new Error(errData.detail || `Request failed: ${response.statusText}`);
+                }
+                return await response.json();
+            } catch (err) {
+                showToast(err.message, 'error');
+                throw err;
+            }
+        }
+
+        async function downloadReportFile(url, fileName) {
+            try {
+                showToast("Generating report, please wait...", "info");
+                
+                const headers = {};
+                if (store.token) {
+                    headers['Authorization'] = `Bearer ${store.token}`;
+                }
+
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: headers
+                });
+                
+                if (response.status === 401) {
+                    logout();
+                    throw new Error("Session expired. Please log in again.");
+                }
+                
+                if (!response.ok) {
+                    throw new Error("Failed to download file. Server responded with status: " + response.status);
+                }
+                
+                const blob = await response.blob();
+                const blobUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = blobUrl;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(blobUrl);
+                showToast("Download started successfully.", "success");
+            } catch (err) {
+                showToast(err.message, "error");
+            }
+        }
+
+        // Authentication logic
+        function login(username, password) {
+            apiRequest('/api/auth/login', 'POST', { username, password })
+                .then(data => {
+                    store.token = data.access_token;
+                    store.user = data.user;
+                    localStorage.setItem('pmis_token', data.access_token);
+                    localStorage.setItem('pmis_user', JSON.stringify(data.user));
+                    showToast("Login successful!", "success");
+                    
+                    if (data.user.role === 'Admin' && data.user.is_first_login) {
+                        store.currentView = 'template-builder';
+                    } else {
+                        store.currentView = 'dashboard';
+                    }
+                    initApp();
+                })
+                .catch(() => {});
+        }
+
+        function logout() {
+            store.token = '';
+            store.user = null;
+            localStorage.removeItem('pmis_token');
+            localStorage.removeItem('pmis_user');
+            store.currentView = 'login';
+            render();
+        }
+
+        // Theme management
+        function toggleTheme() {
+            store.theme = store.theme === 'light' ? 'dark' : 'light';
+            localStorage.setItem('pmis_theme', store.theme);
+            applyTheme();
+        }
+
+        function applyTheme() {
+            if (store.theme === 'dark') {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+        }
+
+        // UI Notification Toast
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = `fixed bottom-5 right-5 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg border text-white transition-all transform translate-y-10 opacity-0 duration-300 ${
+                type === 'success' ? 'bg-emerald-600 border-emerald-500' : 'bg-rose-600 border-rose-500'
+            }`;
+            toast.innerHTML = `
+                <i class="fa-solid ${type === 'success' ? 'fa-circle-check' : 'fa-circle-xmark'}"></i>
+                <span class="font-medium text-sm">${message}</span>
+            `;
+            document.body.appendChild(toast);
+            
+            // animate in
+            setTimeout(() => {
+                toast.classList.remove('translate-y-10', 'opacity-0');
+            }, 10);
+
+            // remove
+            setTimeout(() => {
+                toast.classList.add('translate-y-10', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // Router
+        function navigate(view, projectId = null) {
+            store.currentView = view;
+            if (projectId) {
+                store.currentProjectId = projectId;
+            }
+            render();
+            
+            // Load fresh data depending on target view
+            if (view === 'dashboard') {
+                loadDashboardData();
+            } else if (view === 'project-view' && projectId) {
+                loadProjectWorkspace(projectId);
+            } else if (view === 'template-builder') {
+                loadTemplates();
+            }
+        }
+
+        // Main lifecycle loaders
+        async function loadDashboardData() {
+            try {
+                store.dashboardSummary = await apiRequest('/api/dashboard/summary');
+                store.projects = await apiRequest('/api/projects');
+                render();
+            } catch (err) {}
+        }
+
+        async function loadTemplates() {
+            try {
+                store.templates = await apiRequest('/api/templates');
+                render();
+            } catch (err) {}
+        }
+
+        async function loadProjectWorkspace(projectId) {
+            try {
+                store.currentProject = await apiRequest(`/api/projects/${projectId}`);
+                store.currentActivities = await apiRequest(`/api/projects/${projectId}/activities`);
+                store.ganttData = await apiRequest(`/api/dashboard/gantt/${projectId}`);
+                
+                // Get latest predictions or trigger one if not present
+                try {
+                    store.predictions = await apiRequest(`/api/projects/${projectId}/predict`, 'POST');
+                } catch(e) {
+                    store.predictions = null;
+                }
+                
+                store.predictionHistory = await apiRequest(`/api/projects/${projectId}/prediction-history`);
+                render();
+            } catch (err) {}
+        }
+
+        // API Form handlers
+        async function createNewProject(formData) {
+            try {
+                const project = await apiRequest('/api/projects', 'POST', formData);
+                showToast("Project created successfully!", "success");
+                navigate('project-view', project.id);
+            } catch (err) {}
+        }
+
+        async function updateActivityDetails(activityId, updates) {
+            try {
+                await apiRequest(`/api/projects/${store.currentProjectId}/activities/${activityId}`, 'PUT', updates);
+                showToast("Activity updated successfully. Schedule re-calculated.", "success");
+                // Reload project details
+                loadProjectWorkspace(store.currentProjectId);
+            } catch (err) {}
+        }
+
+        async function changeActivityDuration(activityId, plannedStartDate, durationValue) {
+            try {
+                const durationVal = durationValue.trim().toLowerCase();
+                const months = (durationVal === 'nil' || durationVal === '') ? 0 : parseInt(durationVal) || 0;
+                
+                const startDate = new Date(plannedStartDate);
+                const endDate = new Date(startDate);
+                endDate.setDate(endDate.getDate() + months * 30);
+                const formattedEndDate = endDate.toISOString().split('T')[0];
+                
+                await updateActivityDetails(activityId, {
+                    planned_end_date: formattedEndDate,
+                    change_reason: "Adjusted planned duration"
+                });
+            } catch (err) {
+                showToast("Failed to update activity duration", "error");
+            }
+        }
+
+        async function saveWorkflowTemplate(templateData) {
+            try {
+                if (editingTemplateId) {
+                    await apiRequest(`/api/templates/${editingTemplateId}/full`, 'PUT', templateData);
+                    showToast("Template changes saved successfully!", "success");
+                } else {
+                    await apiRequest('/api/templates', 'POST', templateData);
+                    showToast("Workflow template saved successfully!", "success");
+                }
+                wizardActivities = [];
+                wizardLoops = [];
+                editingTemplateId = null;
+                loadTemplates();
+                // Complete first login wizard check
+                if (store.user.is_first_login) {
+                    await apiRequest('/api/auth/first-login-complete', 'POST');
+                    store.user.is_first_login = false;
+                    localStorage.setItem('pmis_user', JSON.stringify(store.user));
+                }
+                navigate('dashboard');
+            } catch (err) {}
+        }
+
+        // View Renderers
+        function render() {
+            applyTheme();
+            const root = document.getElementById('app');
+            root.innerHTML = '';
+
+            // Handle non-authenticated login route
+            if (!store.token) {
+                root.innerHTML = renderLogin();
+                return;
+            }
+
+            // Wrapper layout (Navbar + Sidebar + Main Workspace)
+            const mainContainer = document.createElement('div');
+            mainContainer.className = "flex h-full overflow-hidden bg-slate-50 dark:bg-slate-900";
+            
+            // Navigation Bar / Sidebar
+            mainContainer.innerHTML = renderSidebar() + `
+                <div class="flex-1 flex flex-col overflow-hidden">
+                    ${renderHeader()}
+                    <main class="flex-1 overflow-y-auto p-6">
+                        <div class="max-w-7xl mx-auto">
+                            ${renderContent()}
+                        </div>
+                    </main>
+                </div>
+            `;
+            root.appendChild(mainContainer);
+        }
+
+        // HTML Screen Component Generators
+        function renderLogin() {
+            return `
+                <div class="min-h-full flex animate-fade-in bg-slate-50 dark:bg-slate-900 transition-colors duration-300">
+                    <!-- Left Column: High-tech naval abstract pattern (No internet dependencies) -->
+                    <div class="hidden lg:block relative w-0 flex-1 bg-slate-950 overflow-hidden">
+                        <div class="absolute inset-0 bg-gradient-to-br from-slate-950 via-slate-900 to-sky-950 opacity-90 z-10"></div>
+                        
+                        <!-- Premium Tech Grid Overlay -->
+                        <div class="absolute inset-0 z-10 opacity-10 bg-[linear-gradient(to_right,#808080_1px,transparent_1px),linear-gradient(to_bottom,#808080_1px,transparent_1px)] bg-[size:24px_24px]"></div>
+                        
+                        <!-- Floating Naval Decorative Accents -->
+                        <div class="absolute top-1/4 left-1/4 w-96 h-96 bg-sky-500/10 rounded-full blur-3xl z-10 animate-pulse"></div>
+                        <div class="absolute bottom-1/4 right-1/4 w-80 h-80 bg-blue-600/10 rounded-full blur-3xl z-10 animate-pulse" style="animation-delay: 2s;"></div>
+                        
+                        <div class="absolute inset-0 h-full w-full z-20 flex flex-col justify-between p-16">
+                            <div class="flex items-center gap-3">
+                                <span class="h-10 w-10 rounded-xl bg-sky-500/10 flex items-center justify-center border border-sky-500/20 backdrop-blur-md">
+                                    <i class="fa-solid fa-anchor text-sky-400 text-lg"></i>
+                                </span>
+                                <span class="text-white font-black text-xl tracking-widest">INDIAN NAVY</span>
+                            </div>
+                            
+                            <div class="space-y-4 max-w-xl">
+                                <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/10 border border-sky-400/20 text-xs font-bold text-sky-400 uppercase tracking-widest">
+                                    <i class="fa-solid fa-microchip"></i> ML-Powered Analytics
+                                </div>
+                                <h2 class="text-white text-5xl font-black tracking-tight leading-tight">
+                                    Ship Acquisition <br/>
+                                    <span class="text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-blue-300">Steering Platform</span>
+                                </h2>
+                                <p class="text-slate-400 text-base leading-relaxed">
+                                    Next-generation project management information system incorporating predictive event-driven delay forecasts and structural risk analysis.
+                                </p>
+                            </div>
+                            
+                            <div class="text-xs text-slate-500 font-semibold tracking-wider">
+                                SECURE DEFIANCE CAPABILITY • OFFLINE SECURED ENVIRONMENT
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Right Column: Login Card -->
+                    <div class="flex-1 flex flex-col justify-center py-12 px-4 sm:px-6 lg:flex-none lg:px-20 xl:px-24 bg-white dark:bg-slate-900 transition-colors duration-300">
+                        <div class="mx-auto w-full max-w-sm lg:w-96">
+                            <div class="text-center lg:text-left space-y-2">
+                                <h2 class="text-3xl font-black tracking-tight text-slate-900 dark:text-white">Sign In</h2>
+                                <p class="text-sm text-slate-500 dark:text-slate-400">Access the project delay monitoring dashboard.</p>
+                            </div>
+                            
+                            <div class="mt-10">
+                                <form id="loginForm" class="space-y-6" onsubmit="event.preventDefault(); login(this.username.value, this.password.value);">
+                                    <div class="space-y-1">
+                                        <label for="username" class="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Username</label>
+                                        <div class="relative rounded-lg shadow-sm">
+                                            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                                <i class="fa-regular fa-user text-slate-400"></i>
+                                            </div>
+                                            <input type="text" id="username" name="username" required value="admin" class="block w-full pl-10 pr-3 py-2.5 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white sm:text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-semibold">
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="space-y-1">
+                                        <label for="password" class="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Password</label>
+                                        <div class="relative rounded-lg shadow-sm">
+                                            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                                <i class="fa-solid fa-lock text-slate-400"></i>
+                                            </div>
+                                            <input type="password" id="password" name="password" required value="admin" class="block w-full pl-10 pr-3 py-2.5 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white sm:text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-semibold">
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex items-center">
+                                            <input id="remember-me" name="remember-me" type="checkbox" checked class="h-4 w-4 text-sky-600 focus:ring-sky-500 border-slate-200 dark:border-slate-800 rounded bg-slate-50 dark:bg-slate-950 transition-all">
+                                            <label for="remember-me" class="ml-2 block text-xs font-bold text-slate-600 dark:text-slate-400">Remember Me</label>
+                                        </div>
+                                        <div class="text-xs">
+                                            <a href="#" onclick="showToast('Feature disabled in offline mode.', 'info');" class="font-bold text-sky-600 hover:text-sky-500 transition-colors">Forgot Password?</a>
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <button type="submit" class="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-bold text-white bg-sky-600 hover:bg-sky-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 transition-all transform hover:-translate-y-0.5 active:translate-y-0">Sign In</button>
+                                    </div>
+                                </form>
+                                
+                                <div class="mt-8 p-3.5 bg-amber-50 dark:bg-amber-950/20 border border-amber-200/50 dark:border-amber-900/50 rounded-xl text-xs text-amber-700 dark:text-amber-400 flex items-start gap-3">
+                                    <i class="fa-solid fa-shield-halved mt-0.5 text-base text-amber-600 dark:text-amber-500"></i>
+                                    <span><strong>Secure Local Dev Node</strong>: Authenticate with user credentials: <code>admin</code> / <code>admin</code>.</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderSidebar() {
+            const isWizard = store.user.is_first_login;
+            const current = store.currentView;
+            return `
+                <div class="hidden md:flex md:w-64 md:flex-col bg-slate-950 text-slate-400 border-r border-slate-900 transition-all duration-300 relative">
+                    <div class="flex flex-col flex-1 min-h-0">
+                        <!-- Sidebar Header -->
+                        <div class="flex items-center h-16 flex-shrink-0 px-6 bg-slate-950 gap-3 border-b border-slate-900">
+                            <span class="h-9 w-9 rounded-lg bg-sky-500/10 flex items-center justify-center border border-sky-500/20">
+                                <i class="fa-solid fa-anchor text-sky-400 text-base"></i>
+                            </span>
+                            <span class="text-white font-extrabold text-sm tracking-wider uppercase">NAVY PMIS</span>
+                        </div>
+                        
+                        <!-- Navigation Links -->
+                        <div class="flex-1 flex flex-col overflow-y-auto py-6">
+                            <nav class="flex-1 px-4 space-y-1.5">
+                                ${!isWizard ? `
+                                    <a href="#" onclick="navigate('dashboard')" class="group flex items-center px-4 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all duration-250 ${current === 'dashboard' ? 'bg-sky-500/10 text-sky-400 border-l-2 border-sky-400 pl-3.5' : 'hover:bg-slate-900/60 hover:text-white'}">
+                                        <i class="fa-solid fa-chart-line mr-3 text-sm transition-transform group-hover:scale-110"></i> Dashboard
+                                    </a>
+                                ` : ''}
+                                <a href="#" onclick="navigate('template-builder')" class="group flex items-center px-4 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all duration-250 ${current === 'template-builder' ? 'bg-sky-500/10 text-sky-400 border-l-2 border-sky-400 pl-3.5' : 'hover:bg-slate-900/60 hover:text-white'}">
+                                    <i class="fa-solid fa-diagram-project mr-3 text-sm transition-transform group-hover:scale-110"></i> Template Builder
+                                </a>
+                            </nav>
+                        </div>
+                        
+                        <!-- User Profile Area -->
+                        <div class="flex-shrink-0 flex bg-slate-950 p-4 border-t border-slate-900/80">
+                            <div class="flex-shrink-0 w-full group block">
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center gap-3">
+                                        <div class="h-9 w-9 rounded-xl bg-gradient-to-tr from-sky-600 to-blue-500 flex items-center justify-center text-white font-extrabold text-sm shadow-md">
+                                            ${store.user.username[0].toUpperCase()}
+                                        </div>
+                                        <div class="max-w-[120px] truncate">
+                                            <p class="text-xs font-bold text-white truncate">${store.user.username}</p>
+                                            <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest capitalize">${store.user.role}</p>
+                                        </div>
+                                    </div>
+                                    <button onclick="logout()" class="text-slate-500 hover:text-rose-400 p-2 rounded-lg hover:bg-slate-900/60 transition-all duration-200" title="Log Out">
+                                        <i class="fa-solid fa-power-off text-sm"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderHeader() {
+            // Contextual Breadcrumbs
+            let breadcrumbs = `<span class="text-slate-400 dark:text-slate-500">Workspace</span>`;
+            if (store.currentView === 'dashboard') {
+                breadcrumbs += ` <i class="fa-solid fa-chevron-right text-[10px] text-slate-300 dark:text-slate-700 mx-2"></i> <span class="font-semibold text-slate-700 dark:text-slate-200">Executive Panel</span>`;
+            } else if (store.currentView === 'template-builder') {
+                breadcrumbs += ` <i class="fa-solid fa-chevron-right text-[10px] text-slate-300 dark:text-slate-700 mx-2"></i> <span class="font-semibold text-slate-700 dark:text-slate-200">Template Setup</span>`;
+            } else if (store.currentView === 'project-view' && store.currentProject) {
+                breadcrumbs += ` <i class="fa-solid fa-chevron-right text-[10px] text-slate-300 dark:text-slate-700 mx-2"></i> <a href="#" onclick="navigate('dashboard')" class="hover:text-sky-500 transition-colors">Projects</a> <i class="fa-solid fa-chevron-right text-[10px] text-slate-300 dark:text-slate-700 mx-2"></i> <span class="font-semibold text-slate-700 dark:text-slate-200">${store.currentProject.project_name}</span>`;
+            }
+
+            return `
+                <header class="h-16 bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-900 flex items-center justify-between px-6 flex-shrink-0 transition-colors duration-300">
+                    <!-- Breadcrumbs left -->
+                    <div class="flex items-center text-xs font-semibold">
+                        ${breadcrumbs}
+                    </div>
+                    
+                    <!-- Search, Notifications, Profile right -->
+                    <div class="flex items-center gap-5">
+                        <!-- Search Box (Visual Mockup) -->
+                        <div class="hidden sm:flex items-center relative">
+                            <i class="fa-solid fa-magnifying-glass absolute left-3 text-slate-400 text-xs"></i>
+                            <input type="text" placeholder="Global search... (Ctrl+K)" readonly onclick="showToast('Command palette coming soon!', 'info')" class="w-48 pl-9 pr-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-400 focus:outline-none cursor-pointer">
+                        </div>
+                        
+                        <!-- Theme switch -->
+                        <button onclick="toggleTheme()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800/80 transition-all duration-200" title="Toggle Appearance">
+                            <i class="fa-solid ${store.theme === 'light' ? 'fa-moon' : 'fa-sun'} text-xs"></i>
+                        </button>
+                        
+                        <!-- Security Badge -->
+                        <div class="h-8 w-px bg-slate-200 dark:bg-slate-900"></div>
+                        <div class="flex items-center gap-2">
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-sky-100 dark:bg-sky-950/40 text-sky-700 dark:text-sky-400 border border-sky-200/40 dark:border-sky-900/30">
+                                <span class="h-1.5 w-1.5 rounded-full bg-sky-500 animate-pulse"></span>
+                                ${store.user.role}
+                            </span>
+                        </div>
+                    </div>
+                </header>
+            `;
+        }
+
+        // Router Content switchboard
+        function renderContent() {
+            switch(store.currentView) {
+                case 'dashboard':
+                    return renderDashboardView();
+                case 'template-builder':
+                    return renderTemplateBuilderView();
+                case 'project-view':
+                    return renderProjectView();
+                default:
+                    return `<div>Loading View...</div>`;
+            }
+        }
+
+        // View: Executive Dashboard
+        function renderDashboardView() {
+            if (!store.dashboardSummary) return `<div class="p-6 text-center text-slate-500 animate-pulse font-semibold">Loading Dashboard Metrics...</div>`;
+            
+            const s = store.dashboardSummary;
+            
+            // Build risk category badges HTML
+            let riskDistributionHtml = '';
+            for (const [risk, count] of Object.entries(s.risk_distribution)) {
+                const borderColors = {
+                    Low: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20 dark:text-emerald-400 dark:bg-emerald-950/20 dark:border-emerald-900/30',
+                    Medium: 'bg-amber-500/10 text-amber-600 border-amber-500/20 dark:text-amber-400 dark:bg-amber-950/20 dark:border-amber-900/30',
+                    High: 'bg-rose-500/10 text-rose-600 border-rose-500/20 dark:text-rose-400 dark:bg-rose-950/20 dark:border-rose-900/30',
+                    Critical: 'bg-purple-500/10 text-purple-600 border-purple-500/20 dark:text-purple-400 dark:bg-purple-950/20 dark:border-purple-900/30'
+                };
+                riskDistributionHtml += `
+                    <div class="flex items-center justify-between p-3.5 rounded-xl border ${borderColors[risk] || 'bg-slate-50 border-slate-200'} hover:scale-[1.02] transition-transform duration-200">
+                        <span class="font-bold text-xs uppercase tracking-wider">${risk} Risk</span>
+                        <span class="text-lg font-black">${count}</span>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="space-y-6 animate-slide-up">
+                    <!-- Top KPIs Grid -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+                        <!-- KPI Card: Total Projects -->
+                        <div class="bg-white dark:bg-slate-950 p-5 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm flex items-center justify-between hover-lift">
+                            <div>
+                                <p class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Total Projects</p>
+                                <h3 class="text-3xl font-black mt-1 text-slate-900 dark:text-white">${s.total_projects}</h3>
+                            </div>
+                            <div class="h-11 w-11 bg-sky-50 dark:bg-sky-950/40 rounded-xl flex items-center justify-center text-sky-600 dark:text-sky-400 border border-sky-100 dark:border-sky-900/30 shadow-inner">
+                                <i class="fa-solid fa-ship text-lg"></i>
+                            </div>
+                        </div>
+                        
+                        <!-- KPI Card: Active Programs -->
+                        <div class="bg-white dark:bg-slate-950 p-5 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm flex items-center justify-between hover-lift">
+                            <div>
+                                <p class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Active Programs</p>
+                                <h3 class="text-3xl font-black mt-1 text-emerald-600 dark:text-emerald-400">${s.active_projects}</h3>
+                            </div>
+                            <div class="h-11 w-11 bg-emerald-50 dark:bg-emerald-950/40 rounded-xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-900/30 shadow-inner">
+                                <i class="fa-solid fa-circle-play text-lg"></i>
+                            </div>
+                        </div>
+                        
+                        <!-- KPI Card: Delayed Status -->
+                        <div class="bg-white dark:bg-slate-950 p-5 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm flex items-center justify-between hover-lift">
+                            <div>
+                                <p class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Delayed Status</p>
+                                <h3 class="text-3xl font-black mt-1 text-rose-600 dark:text-rose-400">${s.delayed_projects}</h3>
+                            </div>
+                            <div class="h-11 w-11 bg-rose-50 dark:bg-rose-950/40 rounded-xl flex items-center justify-center text-rose-600 dark:text-rose-400 border border-rose-100 dark:border-rose-900/30 shadow-inner">
+                                <i class="fa-solid fa-clock-rotate-left text-lg"></i>
+                            </div>
+                        </div>
+                        
+                        <!-- KPI Card: Average Delay % -->
+                        <div class="bg-white dark:bg-slate-950 p-5 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm flex items-center justify-between hover-lift">
+                            <div>
+                                <p class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Average Delay %</p>
+                                <h3 class="text-3xl font-black mt-1 text-slate-900 dark:text-white">${s.avg_delay_percentage}%</h3>
+                            </div>
+                            <div class="h-11 w-11 bg-amber-50 dark:bg-amber-950/40 rounded-xl flex items-center justify-center text-amber-600 dark:text-amber-400 border border-amber-100 dark:border-amber-900/30 shadow-inner">
+                                <i class="fa-solid fa-hourglass-half text-lg"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Split Panels layout -->
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <!-- Left: Live Projects List -->
+                        <div class="lg:col-span-2 bg-white dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm overflow-hidden flex flex-col transition-colors duration-300">
+                            <div class="px-6 py-5 border-b border-slate-100 dark:border-slate-900 flex items-center justify-between">
+                                <div class="space-y-0.5">
+                                    <h4 class="font-bold text-slate-900 dark:text-white text-base">Active Programs & Delay Forecasts</h4>
+                                    <p class="text-xs text-slate-400">Click a project to enter its detailed workspace.</p>
+                                </div>
+                                <button onclick="openCreateProjectModal()" class="text-xs font-bold px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg transition-all duration-200 transform hover:-translate-y-0.5 shadow-sm flex items-center gap-2">
+                                    <i class="fa-solid fa-plus text-[10px]"></i> New Project
+                                </button>
+                            </div>
+                            
+                            <div class="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-900 max-h-[580px]">
+                                ${store.projects.length === 0 ? `
+                                    <div class="p-12 text-center text-slate-400 space-y-2">
+                                        <i class="fa-solid fa-folder-open text-3xl opacity-55"></i>
+                                        <p class="text-sm font-semibold">No Projects Initiated</p>
+                                        <p class="text-xs opacity-75">Click "New Project" to configure a workflow template.</p>
+                                    </div>
+                                ` : store.projects.map(p => {
+                                    const riskColor = {
+                                        Low: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
+                                        Medium: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
+                                        High: 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20',
+                                        Critical: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20'
+                                    };
+                                    const h = s.project_health.find(ph => ph.id === p.id) || { risk_category: 'Low', predicted_delay_pct: 0, predicted_delay_months: 0 };
+                                    return `
+                                        <div class="px-6 py-4 flex items-center justify-between hover:bg-slate-50/50 dark:hover:bg-slate-900/30 cursor-pointer transition-all duration-150" onclick="navigate('project-view', ${p.id})">
+                                            <div class="space-y-1.5 flex-1 pr-6">
+                                                <div class="flex items-center gap-2.5">
+                                                    <span class="h-8 w-8 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400">
+                                                        <i class="fa-solid fa-ship text-xs"></i>
+                                                    </span>
+                                                    <div>
+                                                        <h5 class="font-bold text-sm text-slate-900 dark:text-white hover:text-sky-500 transition-colors">${p.project_name}</h5>
+                                                        <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">ID: ${p.project_id_code} • Class: ${p.ship_class || 'N/A'}</p>
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Mini Progress bar -->
+                                                <div class="flex items-center gap-3">
+                                                    <div class="w-48 bg-slate-100 dark:bg-slate-900 border border-slate-200/20 rounded-full h-2 overflow-hidden">
+                                                        <div class="bg-sky-600 h-2 rounded-full transition-all duration-300" style="width: ${p.overall_progress}%"></div>
+                                                    </div>
+                                                    <span class="text-xs font-bold text-slate-500 dark:text-slate-400">${p.overall_progress}%</span>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="flex items-center gap-6">
+                                                <div class="text-right">
+                                                    <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Delay Forecast</p>
+                                                    <p class="font-black text-slate-900 dark:text-white text-sm mt-0.5">${h.predicted_delay_pct}% (+${h.predicted_delay_months}m)</p>
+                                                </div>
+                                                <span class="text-[10px] font-extrabold px-3 py-1.5 rounded-full border ${riskColor[h.risk_category]} uppercase tracking-wider">${h.risk_category} Risk</span>
+                                            </div>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </div>
+ 
+                        <!-- Right Column: Sidebar summaries -->
+                        <div class="space-y-6">
+                            <!-- Risk Category summary -->
+                            <div class="bg-white dark:bg-slate-950 p-6 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm space-y-4 transition-colors duration-300">
+                                <div class="border-b border-slate-100 dark:border-slate-900 pb-3">
+                                    <h4 class="font-bold text-slate-900 dark:text-white text-sm">ML Risk Distribution</h4>
+                                    <p class="text-[10px] text-slate-400 mt-0.5">Statistical risk classification across active programs.</p>
+                                </div>
+                                <div class="grid grid-cols-2 gap-3 pt-1">
+                                    ${riskDistributionHtml}
+                                </div>
+                            </div>
+                            
+                            <!-- Critical milestones -->
+                            <div class="bg-white dark:bg-slate-950 p-6 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm space-y-4 flex flex-col transition-colors duration-300">
+                                <div class="border-b border-slate-100 dark:border-slate-900 pb-3">
+                                    <h4 class="font-bold text-slate-900 dark:text-white text-sm">Upcoming Milestones</h4>
+                                    <p class="text-[10px] text-slate-400 mt-0.5">Critical target deadlines sorted chronologically.</p>
+                                </div>
+                                <div class="space-y-3 flex-1 overflow-y-auto max-h-[300px]">
+                                    ${s.upcoming_milestones.length === 0 ? `
+                                        <p class="text-xs text-slate-400 text-center py-6 font-semibold">No pending upcoming milestones.</p>
+                                    ` : s.upcoming_milestones.map(m => `
+                                        <div class="p-3 bg-slate-50 dark:bg-slate-900/40 rounded-xl border border-slate-100 dark:border-slate-900/60 flex items-start justify-between hover:scale-[1.01] transition-all duration-150">
+                                            <div class="space-y-0.5 pr-2">
+                                                <p class="text-xs font-bold text-sky-600 dark:text-sky-400 flex items-center gap-1.5">
+                                                    <i class="fa-solid fa-flag text-[10px]"></i>
+                                                    ${m.milestone_name}
+                                                </p>
+                                                <p class="text-[9px] font-semibold text-slate-400">Project: ${m.project_name}</p>
+                                            </div>
+                                            <span class="text-[9px] font-extrabold px-2.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-300/10 select-none whitespace-nowrap">${m.planned_end_date.split('T')[0]}</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+ 
+                <!-- Create Project Modal Placeholder -->
+                <div id="projectModal" class="fixed inset-0 z-50 overflow-y-auto hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+                    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                        <!-- Overlay -->
+                        <div class="fixed inset-0 bg-slate-950/70 dark:bg-slate-950/90 backdrop-blur-sm transition-opacity" aria-hidden="true" onclick="closeCreateProjectModal()"></div>
+                        <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+                        
+                        <!-- Modal Content -->
+                        <div class="inline-block align-middle bg-white dark:bg-slate-950 rounded-2xl text-left overflow-hidden shadow-2xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full border border-slate-200 dark:border-slate-900">
+                            <form id="createProjectForm" onsubmit="event.preventDefault(); handleProjectFormSubmit(this);">
+                                <div class="px-6 py-5 border-b border-slate-100 dark:border-slate-900 flex items-center justify-between">
+                                    <div class="space-y-0.5">
+                                        <h3 class="text-base font-black text-slate-900 dark:text-white" id="modal-title">Initialize Acquisition Program</h3>
+                                        <p class="text-[10px] text-slate-400">Spin up a new ship project tracked on the PMIS database.</p>
+                                    </div>
+                                    <button type="button" onclick="closeCreateProjectModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors">
+                                        <i class="fa-solid fa-xmark text-sm"></i>
+                                    </button>
+                                </div>
+                                <div class="px-6 py-5 space-y-4 max-h-[60vh] overflow-y-auto text-left">
+                                    <div>
+                                        <label class="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Project Name</label>
+                                        <input type="text" name="project_name" required placeholder="e.g. INS Vikrant Upgrade" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">
+                                    </div>
+                                    
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Project Code</label>
+                                            <input type="text" name="project_id_code" required placeholder="e.g. IN-PRJ-0045" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Priority</label>
+                                            <select name="priority" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all cursor-pointer">
+                                                <option value="Low">Low</option>
+                                                <option value="Medium" selected>Medium</option>
+                                                <option value="High">High</option>
+                                                <option value="Critical">Critical</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Vessel Type</label>
+                                            <select name="ship_type" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all cursor-pointer">
+                                                <option value="Destroyer">Destroyer</option>
+                                                <option value="Frigate">Frigate</option>
+                                                <option value="Corvette">Corvette</option>
+                                                <option value="Submarine" selected>Submarine</option>
+                                                <option value="Aircraft Carrier">Aircraft Carrier</option>
+                                                <option value="OPV">OPV</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Vessel Class</label>
+                                            <input type="text" name="ship_class" required placeholder="e.g. Kalvari" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Project Cost (Crores INR)</label>
+                                            <input type="number" name="project_cost" step="0.1" required placeholder="e.g. 18000" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-semibold">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Workflow Template</label>
+                                            <select name="template_id" id="modalTemplateSelector" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all cursor-pointer">
+                                                <!-- Populated dynamically -->
+                                            </select>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Planned Start Date</label>
+                                            <input type="date" name="start_date" required class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all cursor-pointer font-bold">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Customer / Command</label>
+                                            <input type="text" name="customer" placeholder="e.g. Western Naval Command" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="px-6 py-4 bg-slate-50 dark:bg-slate-900/60 border-t border-slate-100 dark:border-slate-900 flex justify-end gap-3 rounded-b-2xl">
+                                    <button type="button" onclick="closeCreateProjectModal()" class="px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors">Cancel</button>
+                                    <button type="submit" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-bold transition-all duration-200 shadow-sm">Initiate Project</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Modal triggers
+        function openCreateProjectModal() {
+            // Load templates into select box
+            apiRequest('/api/templates')
+                .then(templates => {
+                    const selector = document.getElementById('modalTemplateSelector');
+                    selector.innerHTML = templates.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+                    document.getElementById('projectModal').classList.remove('hidden');
+                });
+        }
+
+        function closeCreateProjectModal() {
+            document.getElementById('projectModal').classList.add('hidden');
+        }
+
+        function handleProjectFormSubmit(form) {
+            const formData = {
+                project_name: form.project_name.value,
+                project_id_code: form.project_id_code.value,
+                priority: form.priority.value,
+                ship_type: form.ship_type.value,
+                ship_class: form.ship_class.value,
+                project_cost: parseFloat(form.project_cost.value),
+                template_id: parseInt(form.template_id.value),
+                start_date: form.start_date.value,
+                customer: form.customer.value
+            };
+            createNewProject(formData);
+            closeCreateProjectModal();
+        }        // View: Template Setup Wizard & Builder
+        let wizardActivities = [];
+        let wizardLoops = [];
+        let editingTemplateId = null;
+        let wizardTemplateName = '';
+        let wizardTemplateDesc = '';
+             function renderTemplateBuilderView() {
+            const modeBadge = editingTemplateId 
+                ? `<span class="px-2 py-0.5 ml-2 rounded bg-purple-500/10 text-purple-600 border border-purple-500/25 dark:text-purple-400 dark:bg-purple-950/20 font-extrabold text-[9px] tracking-wider uppercase">Editing Mode</span>` 
+                : '';
+            const resetBtn = editingTemplateId
+                ? `<button onclick="resetBuilderWorkspace()" class="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-bold transition-all border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-1.5"><i class="fa-solid fa-arrows-rotate text-[10px]"></i> New Template / Reset</button>`
+                : '';
+            return `
+                <div class="bg-white dark:bg-slate-950 p-6 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm space-y-6 animate-slide-up">
+                    <div class="border-b border-slate-100 dark:border-slate-900 pb-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                        <div class="space-y-0.5">
+                            <h3 class="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
+                                <i class="fa-solid fa-diagram-project text-sky-600 dark:text-sky-500 text-sm"></i>
+                                Workflow Template Builder ${modeBadge}
+                            </h3>
+                            <p class="text-xs text-slate-400 mt-1">Configure sequential and parallel task workflows with dependency logic.</p>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2.5">
+                            <div>
+                                <select onchange="if(this.value) loadTemplateIntoBuilder(this.value); this.value='';" class="px-3.5 py-2 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 text-slate-900 dark:text-white rounded-lg text-xs font-bold focus:outline-none shadow-sm cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors">
+                                    <option value="">-- Load Existing Template --</option>
+                                    ${store.templates ? store.templates.map(t => `<option value="${t.id}" ${editingTemplateId === t.id ? 'selected' : ''}>${t.name} (${t.activity_count} steps)</option>`).join('') : ''}
+                                </select>
+                            </div>
+                            ${resetBtn}
+                            <button onclick="toggleSavedTemplatesModal(true)" class="px-3.5 py-2 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm">
+                                <i class="fa-solid fa-list-check text-sky-600 dark:text-sky-500"></i> Saved Templates Detail
+                            </button>
+                        </div>
+                    </div>
+ 
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <!-- Left form specs -->
+                        <div class="space-y-4">
+                            <h4 class="font-extrabold text-[10px] text-sky-600 dark:text-sky-500 uppercase tracking-widest">1. Template Details</h4>
+                            <div class="space-y-3 p-4 bg-slate-50/50 dark:bg-slate-900/10 border border-slate-200/50 dark:border-slate-900/60 rounded-xl">
+                                <div>
+                                    <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Template Name</label>
+                                    <input type="text" id="t_name" oninput="wizardTemplateName = this.value" value="${wizardTemplateName}" placeholder="e.g. Submarine Acquisition" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Description</label>
+                                    <textarea id="t_desc" rows="3" oninput="wizardTemplateDesc = this.value" placeholder="Explain the workflow application context..." class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">${wizardTemplateDesc}</textarea>
+                                </div>
+                                <div class="pt-3 border-t border-slate-100 dark:border-slate-900/60">
+                                    <button onclick="submitWorkflowTemplate()" class="w-full py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg font-bold text-xs transition-all transform hover:-translate-y-0.5 shadow-sm">Save Template Configuration</button>
+                                </div>
+                            </div>
+                        </div>
+ 
+                        <!-- Right activities builder -->
+                        <div class="lg:col-span-2 space-y-6">
+                            <div class="space-y-3">
+                                <div class="flex items-center justify-between">
+                                    <h4 class="font-extrabold text-[10px] text-sky-600 dark:text-sky-500 uppercase tracking-widest">2. Activities Flow Builder</h4>
+                                    <button onclick="openAddActivityModal()" class="text-xs font-bold px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-all duration-200 shadow-sm flex items-center gap-1.5 transform hover:-translate-y-0.5">
+                                        <i class="fa-solid fa-plus text-[10px]"></i> Add Task
+                                    </button>
+                                </div>
+ 
+                                <!-- List of current configured template activities -->
+                                <div class="border border-slate-200 dark:border-slate-900 rounded-xl overflow-hidden bg-white dark:bg-slate-950">
+                                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-900 text-left">
+                                        <thead class="bg-slate-50 dark:bg-slate-900/50">
+                                            <tr class="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                                                <th class="px-4 py-3">Seq</th>
+                                                <th class="px-4 py-3">Activity Name</th>
+                                                <th class="px-4 py-3">Category</th>
+                                                <th class="px-4 py-3">Duration</th>
+                                                <th class="px-4 py-3">Risk Weight</th>
+                                                <th class="px-4 py-3">Predecessors</th>
+                                                <th class="px-4 py-3 text-right">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="templateActivitiesTable" class="divide-y divide-slate-100 dark:divide-slate-900 text-xs">
+                                            ${wizardActivities.length === 0 ? `
+                                                <tr>
+                                                    <td colspan="7" class="p-8 text-center text-xs text-slate-400 space-y-1.5">
+                                                        <i class="fa-solid fa-list text-2xl opacity-50 block mb-1"></i>
+                                                        No activities added yet. Click "Add Task" to populate.
+                                                    </td>
+                                                </tr>
+                                            ` : wizardActivities.map((a, idx) => `
+                                                <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-900/20">
+                                                    <td class="px-4 py-3 font-semibold text-slate-500">${a.sequence_number}</td>
+                                                    <td class="px-4 py-3 font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                                                        ${a.is_milestone ? '⚓' : ''} ${a.name}
+                                                    </td>
+                                                    <td class="px-4 py-3 font-[10px] font-semibold text-slate-400 uppercase tracking-wider">${a.category}</td>
+                                                    <td class="px-4 py-3 font-medium text-slate-500">${a.default_duration_months === 0 ? 'nil' : a.default_duration_months + 'm'}</td>
+                                                    <td class="px-4 py-3 font-medium text-slate-500">${a.historical_risk_weight}%</td>
+                                                    <td class="px-4 py-3 text-[10px] font-extrabold text-sky-600 dark:text-sky-400">${a.dependency_list.join(', ') || '-'}</td>
+                                                    <td class="px-4 py-3 text-right">
+                                                        <button onclick="removeActivityFromBuilder(${idx})" class="text-rose-500 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-500/10 transition-colors"><i class="fa-solid fa-trash-can text-sm"></i></button>
+                                                    </td>
+                                                </tr>
+                                            `).join('')}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+ 
+                            <!-- Loops Builder Section -->
+                            <div class="border border-slate-200 dark:border-slate-850 rounded-xl p-4 bg-slate-50/50 dark:bg-slate-900/10 space-y-4">
+                                <div class="space-y-0.5">
+                                    <h5 class="font-bold text-xs text-slate-850 dark:text-slate-200">Feedback / Rework Loops (Optional)</h5>
+                                    <p class="text-[10px] text-slate-400">Define cyclical feedback links (e.g. Iterative review or test rework cycles).</p>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                                    <div>
+                                        <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">From Task</label>
+                                        <select id="loop_from" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none cursor-pointer">
+                                            <option value="">-- Select Task --</option>
+                                            ${wizardActivities.map(a => `<option value="${a.sequence_number}">[${a.sequence_number}] ${a.name}</option>`).join('')}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">To Task Sequence IDs (e.g. 1, 2)</label>
+                                        <input type="text" id="loop_to" placeholder="e.g. 1, 2" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">
+                                    </div>
+                                    <div class="flex gap-2">
+                                        <div class="flex-1">
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Loop Description</label>
+                                            <input type="text" id="loop_desc" placeholder="e.g. Rework if inspections fail" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none">
+                                        </div>
+                                        <button onclick="addLoopToBuilder()" class="py-2 px-4 bg-sky-600 hover:bg-sky-500 text-white rounded-lg font-bold text-xs transition-all shadow-sm">Add</button>
+                                    </div>
+                                </div>
+                                ${wizardLoops.length > 0 ? `
+                                    <div class="divide-y divide-slate-100 dark:divide-slate-900 border-t border-slate-200 dark:border-slate-900 pt-2">
+                                        ${wizardLoops.map((l, idx) => `
+                                            <div class="flex items-center justify-between py-2.5 text-[11px]">
+                                                <span class="font-semibold text-slate-700 dark:text-slate-300">
+                                                    <span class="px-2 py-0.5 rounded-md bg-purple-500/10 text-purple-600 dark:bg-purple-950/20 dark:text-purple-400 font-extrabold mr-1.5 uppercase text-[9px]">Loop</span>
+                                                    Task <strong>${l.from_seq}</strong> links back to Task <strong>${l.to_seq}</strong>: <span class="italic text-slate-400 font-medium">"${l.description}"</span>
+                                                </span>
+                                                <button onclick="removeLoopFromBuilder(${idx})" class="text-rose-500 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-500/10 transition-colors"><i class="fa-solid fa-trash-can text-xs"></i></button>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    </div>
+ 
+                    <!-- Live Flow Chart Section -->
+                    ${wizardActivities.length > 0 ? `
+                        <div class="border-t border-slate-100 dark:border-slate-850 pt-6 space-y-4 animate-fade-in">
+                            <div>
+                                <h4 class="font-bold text-sm text-navy-700 dark:text-navy-450 uppercase tracking-wider">Live Workflow Flow Chart</h4>
+                                <p class="text-xs text-slate-400 mt-0.5">Visualization of sequential/parallel connections and feedback loops automatically calculated from your configuration.</p>
+                            </div>
+                            <div class="overflow-auto border border-slate-100 dark:border-slate-850 rounded-xl p-4 bg-slate-50 dark:bg-slate-900/25">
+                                ${buildDependencyGraphSvg(wizardActivities, wizardLoops, true)}
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+ 
+                <!-- Add Activity modal -->
+                <div id="activityModal" class="fixed inset-0 z-50 overflow-y-auto hidden" role="dialog" aria-modal="true">
+                    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                        <div class="fixed inset-0 bg-slate-950/70 dark:bg-slate-950/95 backdrop-blur-sm transition-opacity" onclick="closeAddActivityModal()"></div>
+                        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+                        <div class="inline-block align-middle bg-white dark:bg-slate-950 rounded-2xl text-left overflow-hidden shadow-2xl transform transition-all sm:my-8 sm:align-middle sm:max-w-md sm:w-full border border-slate-200 dark:border-slate-900">
+                            <form id="activityForm" onsubmit="event.preventDefault(); saveActivityToBuilder(this);">
+                                <div class="px-6 py-5 border-b border-slate-100 dark:border-slate-900 flex items-center justify-between">
+                                    <div class="space-y-0.5">
+                                        <h3 class="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">Add Task Step</h3>
+                                        <p class="text-[10px] text-slate-400">Configure new activity step in current workflow builder.</p>
+                                    </div>
+                                    <button type="button" onclick="closeAddActivityModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-205 p-1 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors">
+                                        <i class="fa-solid fa-xmark text-sm"></i>
+                                    </button>
+                                </div>
+                                <div class="px-6 py-4 space-y-4">
+                                    <div>
+                                        <label class="block text-[10px] font-bold text-slate-450 uppercase tracking-wider">Activity Name</label>
+                                        <input type="text" name="name" required placeholder="e.g. Technical Evaluation" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-455 uppercase tracking-wider">Sequence ID</label>
+                                            <input type="number" name="sequence_number" required placeholder="e.g. 1" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-455 uppercase tracking-wider">Category</label>
+                                            <select name="category" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none cursor-pointer">
+                                                <option value="Administrative">Administrative</option>
+                                                <option value="Technical" selected>Technical</option>
+                                                <option value="Procurement">Procurement</option>
+                                                <option value="Construction">Construction</option>
+                                                <option value="Inspection">Inspection</option>
+                                                <option value="Testing">Testing</option>
+                                                <option value="Delivery">Delivery</option>
+                                                <option value="Documentation">Documentation</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-[10px] font-bold text-slate-455 uppercase tracking-wider">Planned Duration (Months)</label>
+                                        <input type="text" name="default_duration_months" required placeholder="e.g. 1 (or type 'nil' / 0)" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-955 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">
+                                    </div>
+                                    <div>
+                                        <label class="block text-[10px] font-bold text-slate-455 uppercase tracking-wider">Historical Risk Weight (%)</label>
+                                        <input type="number" name="historical_risk_weight" required min="0" max="100" placeholder="e.g. 50" value="50" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-955 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">
+                                    </div>
+                                    <div>
+                                        <label class="block text-[10px] font-bold text-slate-455 uppercase tracking-wider">Predecessor Sequence IDs (Comma separated)</label>
+                                        <input type="text" name="dependency_list" placeholder="e.g. 1, 2 (or type 'nil' / leave blank)" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-955 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">
+                                    </div>
+                                    <div class="flex items-center gap-6 pt-1 select-none">
+                                        <label class="flex items-center cursor-pointer">
+                                            <input type="checkbox" name="is_milestone" class="h-4 w-4 text-sky-600 focus:ring-sky-500/20 border-slate-250 dark:border-slate-800 bg-white dark:bg-slate-950 rounded transition-all">
+                                            <span class="ml-2 text-[10px] font-bold text-slate-450 uppercase tracking-wider">Milestone</span>
+                                        </label>
+                                        <label class="flex items-center cursor-pointer">
+                                            <input type="checkbox" name="is_critical_path" class="h-4 w-4 text-sky-600 focus:ring-sky-500/20 border-slate-250 dark:border-slate-800 bg-white dark:bg-slate-950 rounded transition-all">
+                                            <span class="ml-2 text-[10px] font-bold text-slate-455 uppercase tracking-wider">Critical Path</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="px-6 py-4 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-905 flex justify-end gap-3 rounded-b-2xl">
+                                    <button type="button" onclick="closeAddActivityModal()" class="px-4 py-2 border border-slate-250 dark:border-slate-800 rounded-lg text-xs font-bold text-slate-650 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-850 transition-colors shadow-sm">Cancel</button>
+                                    <button type="submit" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm">Add Step</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+ 
+                <!-- View Saved Templates Modal -->
+                <div id="savedTemplatesModal" class="fixed inset-0 z-50 overflow-y-auto hidden" role="dialog" aria-modal="true">
+                    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                        <div class="fixed inset-0 bg-slate-950/70 dark:bg-slate-950/95 backdrop-blur-sm transition-opacity" onclick="toggleSavedTemplatesModal(false)"></div>
+                        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+                        <div class="inline-block align-middle bg-white dark:bg-slate-955 rounded-2xl text-left overflow-hidden shadow-2xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full border border-slate-205 dark:border-slate-900">
+                            <div class="px-6 py-5 border-b border-slate-100 dark:border-slate-900 flex items-center justify-between">
+                                <div class="space-y-0.5">
+                                    <h3 class="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">Saved Workflow Templates</h3>
+                                    <p class="text-[10px] text-slate-400">View and manage pre-configured naval acquisition workflows.</p>
+                                </div>
+                                <button type="button" onclick="toggleSavedTemplatesModal(false)" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors">
+                                    <i class="fa-solid fa-xmark text-sm"></i>
+                                </button>
+                            </div>
+                            <div class="px-6 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+                                <div class="border border-slate-200 dark:border-slate-900 rounded-xl overflow-hidden bg-white dark:bg-slate-950">
+                                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-900 text-left">
+                                        <thead class="bg-slate-50 dark:bg-slate-900/50">
+                                            <tr class="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                                                <th class="px-4 py-3">Template Name</th>
+                                                <th class="px-4 py-3">Description</th>
+                                                <th class="px-4 py-3">Task Steps</th>
+                                                <th class="px-4 py-3">Rework Loops</th>
+                                                <th class="px-4 py-3 text-right">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-slate-100 dark:divide-slate-900 text-xs">
+                                            ${!store.templates || store.templates.length === 0 ? `
+                                                <tr>
+                                                    <td colspan="5" class="p-8 text-center text-xs text-slate-400 space-y-1">
+                                                        <i class="fa-solid fa-folder-open text-2xl opacity-50 block mb-1"></i>
+                                                        No saved templates found.
+                                                    </td>
+                                                </tr>
+                                            ` : store.templates.map(t => {
+                                                const loopCount = t.feedback_loops ? t.feedback_loops.length : 0;
+                                                return `
+                                                    <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors">
+                                                        <td class="px-4 py-3 font-bold text-slate-900 dark:text-white">${t.name}</td>
+                                                        <td class="px-4 py-3 text-slate-450 font-medium">${t.description || '-'}</td>
+                                                        <td class="px-4 py-3 text-[10px] font-extrabold text-sky-600 dark:text-sky-400 uppercase tracking-wider">${t.activity_count || 0} steps</td>
+                                                        <td class="px-4 py-3 text-[10px] font-extrabold text-purple-650 dark:text-purple-400 uppercase tracking-wider">${loopCount} loops</td>
+                                                        <td class="px-4 py-3 text-right space-x-1.5 whitespace-nowrap">
+                                                            <button onclick="loadTemplateIntoBuilder(${t.id})" class="text-[10px] font-bold px-2.5 py-1 bg-sky-50 hover:bg-sky-100 text-sky-650 dark:bg-sky-950/40 dark:text-sky-400 rounded border border-sky-200/20 transition-colors">Load</button>
+                                                            <button onclick="duplicateTemplateFromBuilder(${t.id})" class="text-[10px] font-bold px-2.5 py-1 bg-slate-50 hover:bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-300 rounded border border-slate-200 dark:border-slate-800 transition-colors">Copy</button>
+                                                            <button onclick="archiveTemplateFromBuilder(${t.id})" class="text-[10px] font-bold px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:bg-rose-950/20 dark:text-rose-400 rounded border border-rose-500/20 transition-colors">Archive</button>
+                                                        </td>
+                                                    </tr>
+                                                `;
+                                            }).join('')}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="px-6 py-4 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-900 flex justify-end rounded-b-2xl">
+                                <button type="button" onclick="toggleSavedTemplatesModal(false)" class="px-4 py-2 border border-slate-250 dark:border-slate-800 rounded-lg text-xs font-bold text-slate-650 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shadow-sm">Close</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function toggleSavedTemplatesModal(show) {
+            const modal = document.getElementById('savedTemplatesModal');
+            if (show) {
+                modal.classList.remove('hidden');
+            } else {
+                modal.classList.add('hidden');
+            }
+        }
+
+        async function loadTemplateIntoBuilder(templateId) {
+            try {
+                const details = await apiRequest(`/api/templates/${templateId}`);
+                editingTemplateId = details.id;
+                wizardTemplateName = details.name;
+                wizardTemplateDesc = details.description || '';
+                
+                wizardActivities = details.activities.map(a => ({
+                    name: a.name,
+                    sequence_number: a.sequence_number,
+                    category: a.category,
+                    default_duration_months: a.default_duration_months,
+                    historical_risk_weight: a.historical_risk_weight,
+                    dependency_list: a.dependency_list || [],
+                    is_milestone: a.is_milestone,
+                    is_critical_path: a.is_critical_path
+                }));
+                wizardLoops = details.feedback_loops || [];
+                
+                showToast(`Template '${details.name}' loaded successfully!`, "success");
+                toggleSavedTemplatesModal(false);
+                render();
+            } catch(e) {
+                showToast("Failed to load template.", "error");
+            }
+        }
+
+        function resetBuilderWorkspace() {
+            editingTemplateId = null;
+            wizardActivities = [];
+            wizardLoops = [];
+            wizardTemplateName = '';
+            wizardTemplateDesc = '';
+            render();
+        }
+
+        async function duplicateTemplateFromBuilder(templateId) {
+            const name = prompt("Enter a name for the duplicated template:");
+            if (!name) return;
+            try {
+                await apiRequest(`/api/templates/${templateId}/duplicate?new_name=${encodeURIComponent(name)}`, 'POST');
+                showToast("Template duplicated successfully!", "success");
+                store.templates = await apiRequest('/api/templates');
+                render();
+            } catch(e) {
+                showToast("Failed to duplicate template.", "error");
+            }
+        }
+
+        async function archiveTemplateFromBuilder(templateId) {
+            if (!confirm("Are you sure you want to archive this template?")) return;
+            try {
+                await apiRequest(`/api/templates/${templateId}`, 'DELETE');
+                showToast("Template archived successfully.", "success");
+                store.templates = await apiRequest('/api/templates');
+                render();
+            } catch(e) {
+                showToast("Failed to archive template.", "error");
+            }
+        }
+
+        function openAddActivityModal() {
+            document.getElementById('activityModal').classList.remove('hidden');
+        }
+
+        function closeAddActivityModal() {
+            document.getElementById('activityModal').classList.add('hidden');
+        }
+
+        function saveActivityToBuilder(form) {
+            const deps = form.dependency_list.value ? form.dependency_list.value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)) : [];
+            const durationVal = form.default_duration_months.value.trim().toLowerCase();
+            const duration = (durationVal === 'nil' || durationVal === '') ? 0 : parseInt(durationVal) || 0;
+            const riskWeightVal = parseFloat(form.historical_risk_weight.value);
+            const riskWeight = isNaN(riskWeightVal) ? 50.0 : riskWeightVal;
+            
+            wizardActivities.push({
+                name: form.name.value,
+                sequence_number: parseInt(form.sequence_number.value),
+                category: form.category.value,
+                default_duration_months: duration,
+                historical_risk_weight: riskWeight,
+                dependency_list: deps,
+                is_milestone: form.is_milestone.checked,
+                is_critical_path: form.is_critical_path.checked
+            });
+            // Sort by sequence number
+            wizardActivities.sort((a, b) => a.sequence_number - b.sequence_number);
+            form.reset();
+            render();
+            closeAddActivityModal();
+        }
+
+        function removeActivityFromBuilder(index) {
+            wizardActivities.splice(index, 1);
+            render();
+        }
+
+        function addLoopToBuilder() {
+            const from_val = document.getElementById('loop_from').value;
+            const to_val = document.getElementById('loop_to').value.trim();
+            const desc = document.getElementById('loop_desc').value.trim();
+            if (!from_val || !to_val) {
+                showToast("Please select 'From' task and specify 'To' task sequence IDs.", "error");
+                return;
+            }
+            const from_seq = parseInt(from_val);
+            const to_seqs = to_val.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+            
+            if (to_seqs.length === 0) {
+                showToast("Please enter valid numeric To Task IDs.", "error");
+                return;
+            }
+            
+            let addedCount = 0;
+            for (const to_seq of to_seqs) {
+                if (from_seq <= to_seq) {
+                    showToast(`Rework loop must link from a later task (${from_seq}) back to an earlier task (${to_seq}). Skipping.`, "error");
+                    continue;
+                }
+                
+                // Verify the "To" activity exists in wizardActivities
+                const toActExists = wizardActivities.some(a => a.sequence_number === to_seq);
+                if (!toActExists) {
+                    showToast(`Task sequence #${to_seq} does not exist in template. Skipping.`, "error");
+                    continue;
+                }
+
+                // Check if already exists
+                const duplicate = wizardLoops.some(l => l.from_seq === from_seq && l.to_seq === to_seq);
+                if (duplicate) {
+                    continue;
+                }
+                
+                wizardLoops.push({
+                    from_seq: from_seq,
+                    to_seq: to_seq,
+                    description: desc || "Feedback/rework loop"
+                });
+                addedCount++;
+            }
+            
+            if (addedCount > 0) {
+                showToast(`Successfully added ${addedCount} feedback loop(s).`, "success");
+            }
+            render();
+        }
+
+        function removeLoopFromBuilder(index) {
+            wizardLoops.splice(index, 1);
+            render();
+        }
+
+        function submitWorkflowTemplate() {
+            const t_name = document.getElementById('t_name').value;
+            const t_desc = document.getElementById('t_desc').value;
+            if (!t_name) {
+                showToast("Please enter a template name.", "error");
+                return;
+            }
+            if (wizardActivities.length === 0) {
+                showToast("Please configure at least one activity step.", "error");
+                return;
+            }
+            saveWorkflowTemplate({
+                name: t_name,
+                description: t_desc,
+                activities: wizardActivities,
+feedback_loops: wizardLoops
+            });
+        }
+
+        // View: Project execution, updates & predictions view
+        let activeTab = 'activities'; // activities, kanban, gantt, graph, predictions
+
+        function renderProjectView() {
+            const p = store.currentProject;
+            if (!p) return `<div class="p-6 text-center text-slate-500 animate-pulse font-semibold">Loading Project Workspace...</div>`;
+
+            return `
+                <div class="space-y-6 animate-slide-up">
+                    <!-- Project metadata bar -->
+                    <div class="bg-white dark:bg-slate-950 p-6 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4 transition-colors duration-300">
+                        <div class="space-y-1.5">
+                            <div class="flex items-center gap-2">
+                                <span class="h-6 w-6 rounded-lg bg-sky-500/10 flex items-center justify-center border border-sky-500/20 text-sky-600 dark:text-sky-400">
+                                    <i class="fa-solid fa-ship text-xs"></i>
+                                </span>
+                                <h3 class="text-xl font-black text-slate-900 dark:text-white">${p.project_name}</h3>
+                            </div>
+                            <p class="text-xs text-slate-400">Project Code: <strong class="text-slate-600 dark:text-slate-350">${p.project_id_code}</strong> | Class: <strong class="text-slate-600 dark:text-slate-350">${p.ship_class || 'N/A'}</strong> | Vessel: <strong class="text-slate-600 dark:text-slate-350">${p.ship_type || 'N/A'}</strong></p>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-3">
+                            <button onclick="downloadReportFile('${API_BASE}/api/reports/project/${p.id}/pdf', '${p.project_name.replace(/[^a-zA-Z0-9]/g, '_')}_Report.pdf')" class="px-3.5 py-2 border border-slate-250 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm">
+                                <i class="fa-solid fa-file-pdf text-rose-500"></i> Download PDF
+                            </button>
+                            <button onclick="downloadReportFile('${API_BASE}/api/reports/project/${p.id}/excel', '${p.project_name.replace(/[^a-zA-Z0-9]/g, '_')}_Report.xlsx')" class="px-3.5 py-2 border border-slate-250 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm">
+                                <i class="fa-solid fa-file-excel text-emerald-500"></i> Download Excel
+                            </button>
+                            <button onclick="navigate('dashboard')" class="px-3.5 py-2 border border-slate-250 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 rounded-lg text-xs font-bold transition-all flex items-center gap-1"><i class="fa-solid fa-arrow-left text-[10px]"></i> Back</button>
+                        </div>
+                    </div>
+
+                    <!-- Prediction Dashboard Header -->
+                    ${renderPredictionsDashboardHeader()}
+
+                    <!-- Tab navigation -->
+                    <div class="border-b border-slate-200 dark:border-slate-900 flex items-center gap-6 select-none">
+                        <button onclick="switchTab('activities')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${activeTab === 'activities' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                            <i class="fa-solid fa-clipboard-list mr-2"></i> Activities & Updates
+                        </button>
+                        <button onclick="switchTab('kanban')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${activeTab === 'kanban' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                            <i class="fa-solid fa-square-poll-vertical mr-2"></i> Kanban Board
+                        </button>
+                        <button onclick="switchTab('gantt')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${activeTab === 'gantt' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                            <i class="fa-solid fa-timeline mr-2"></i> Gantt & Schedule
+                        </button>
+                        <button onclick="switchTab('graph')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${activeTab === 'graph' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                            <i class="fa-solid fa-circle-nodes mr-2"></i> Dependency Graph
+                        </button>
+                        <button onclick="switchTab('predictions')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${activeTab === 'predictions' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                            <i class="fa-solid fa-brain mr-2"></i> ML Prediction Details
+                        </button>
+                    </div>
+
+                    <!-- Tab Workspaces -->
+                    <div>
+                        ${activeTab === 'activities' ? renderActivitiesTab() : 
+                          activeTab === 'kanban' ? renderKanbanTab() :
+                          activeTab === 'gantt' ? renderGanttTab() : 
+                          activeTab === 'graph' ? renderDependencyGraphTab() : renderPredictionsTab()}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Mini prediction cards inside Project workspace
+        function renderPredictionsDashboardHeader() {
+            if (!store.predictions) return '';
+            const pred = store.predictions;
+            
+            const riskColors = {
+                Low: 'bg-emerald-500/5 border-emerald-500/20 text-emerald-600 dark:bg-emerald-950/20 dark:border-emerald-900/40 dark:text-emerald-400',
+                Medium: 'bg-amber-500/5 border-amber-500/20 text-amber-600 dark:bg-amber-950/20 dark:border-amber-900/40 dark:text-amber-400',
+                High: 'bg-rose-500/5 border-rose-500/20 text-rose-600 dark:bg-rose-950/20 dark:border-rose-900/40 dark:text-rose-400',
+                Critical: 'bg-purple-500/5 border-purple-500/20 text-purple-600 dark:bg-purple-950/20 dark:border-purple-900/40 dark:text-purple-400'
+            };
+
+            return `
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-5 transition-colors duration-300 select-none">
+                    <div class="bg-white dark:bg-slate-950 p-5 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm flex flex-col justify-between">
+                        <div>
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Delay Forecast</p>
+                            <h4 class="text-2xl font-black mt-1 text-slate-900 dark:text-white">+${pred.delay_months} Months</h4>
+                        </div>
+                        <p class="text-[10px] font-semibold text-rose-500 mt-2 flex items-center gap-1"><i class="fa-solid fa-chart-line text-[9px]"></i> Delay Factor: ${pred.delay_percentage}%</p>
+                    </div>
+                    <div class="p-5 rounded-2xl border shadow-sm flex flex-col justify-between ${riskColors[pred.risk_category] || 'bg-white border-slate-200'}">
+                        <div>
+                            <p class="text-[10px] font-bold uppercase tracking-widest opacity-60">Delay Risk Level</p>
+                            <h4 class="text-2xl font-black mt-1 uppercase">${pred.risk_category}</h4>
+                        </div>
+                        <p class="text-[10px] font-semibold mt-2 flex items-center gap-1 opacity-75"><i class="fa-solid fa-bullseye text-[9px]"></i> Confidence: ${pred.confidence}%</p>
+                    </div>
+                    <div class="bg-white dark:bg-slate-950 p-5 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm flex flex-col justify-between">
+                        <div>
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Project Progress</p>
+                            <h4 class="text-2xl font-black mt-1 text-slate-900 dark:text-white">${pred.project_progress_pct}%</h4>
+                        </div>
+                        <!-- progress bar -->
+                        <div class="w-full bg-slate-100 dark:bg-slate-900 h-1.5 rounded-full mt-3 overflow-hidden">
+                            <div class="bg-sky-500 h-1.5 rounded-full transition-all duration-300" style="width: ${pred.project_progress_pct}%"></div>
+                        </div>
+                    </div>
+                    <div class="bg-white dark:bg-slate-950 p-5 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm flex flex-col justify-between">
+                        <div>
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Est. Handover Date</p>
+                            <h4 class="text-lg font-black mt-2 text-slate-900 dark:text-white">${pred.expected_completion_date.split('T')[0]}</h4>
+                        </div>
+                        <p class="text-[10px] font-semibold text-slate-400 mt-2 flex items-center gap-1"><i class="fa-solid fa-calendar-check text-[9px]"></i> Based on ML Prediction</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function switchTab(tab) {
+            activeTab = tab;
+            render();
+        }
+
+        async function handleKanbanDrop(event, newStatus) {
+            event.preventDefault();
+            const id = parseInt(event.dataTransfer.getData('text/plain'));
+            if (isNaN(id)) return;
+            const act = store.currentActivities.find(a => a.id === id);
+            if (act && act.current_status !== newStatus) {
+                try {
+                    await apiRequest(`/api/projects/${store.currentProjectId}/activities/${id}`, 'PUT', {
+                        current_status: newStatus,
+                        change_reason: `Status changed to ${newStatus} via Kanban board`
+                    });
+                    showToast(`Task status updated to ${newStatus}`, "success");
+                    loadProjectWorkspace(store.currentProjectId);
+                } catch(e) {
+                    showToast("Failed to update status: " + e.message, "error");
+                }
+            }
+        }
+
+        function renderKanbanTab() {
+            const p = store.currentProject;
+            const activities = store.currentActivities || [];
+            
+            const columns = {
+                NotStarted: { name: 'Not Started', color: 'bg-slate-100 text-slate-800 border-slate-200 dark:bg-slate-900/40 dark:text-slate-350 dark:border-slate-800', bar: 'bg-slate-400', list: [] },
+                InProgress: { name: 'In Progress', color: 'bg-blue-50 text-blue-800 border-blue-100 dark:bg-blue-950/20 dark:text-blue-300 dark:border-blue-900/50', bar: 'bg-blue-500', list: [] },
+                Delayed: { name: 'Delayed', color: 'bg-amber-50 text-amber-800 border-amber-100 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-900/50', bar: 'bg-amber-500', list: [] },
+                Blocked: { name: 'Blocked', color: 'bg-rose-50 text-rose-800 border-rose-100 dark:bg-rose-950/20 dark:text-rose-350 dark:border-rose-900/50', bar: 'bg-rose-500', list: [] },
+                Completed: { name: 'Completed', color: 'bg-emerald-50 text-emerald-800 border-emerald-100 dark:bg-emerald-950/20 dark:text-emerald-300 dark:border-emerald-900/50', bar: 'bg-emerald-500', list: [] }
+            };
+            
+            activities.forEach(act => {
+                const col = columns[act.current_status] || columns.NotStarted;
+                col.list.push(act);
+            });
+            
+            let html = `
+                <div class="grid grid-cols-1 md:grid-cols-5 gap-4 overflow-x-auto pb-4 select-none animate-slide-up">
+            `;
+            
+            Object.keys(columns).forEach(statusKey => {
+                const col = columns[statusKey];
+                html += `
+                    <div class="flex flex-col bg-slate-50/70 dark:bg-slate-900/10 border border-slate-200 dark:border-slate-900 rounded-xl p-3 min-h-[500px]" 
+                         ondragover="event.preventDefault();" 
+                         ondrop="handleKanbanDrop(event, '${statusKey}')">
+                        
+                        <!-- Column Header -->
+                        <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-200/50 dark:border-slate-800/50">
+                            <div class="flex items-center gap-2">
+                                <span class="h-2 w-2 rounded-full ${col.bar}"></span>
+                                <span class="text-xs font-black uppercase text-slate-700 dark:text-slate-200">${col.name}</span>
+                            </div>
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${col.color}">${col.list.length}</span>
+                        </div>
+                        
+                        <!-- Column Body -->
+                        <div class="flex-1 space-y-2.5 overflow-y-auto max-h-[600px] pr-1">
+                            ${col.list.length === 0 ? `
+                                <div class="h-24 border border-dashed border-slate-200 dark:border-slate-800/60 rounded-xl flex items-center justify-center text-[10px] text-slate-400 font-bold uppercase p-2 text-center select-none">
+                                    Drag tasks here
+                                </div>
+                            ` : col.list.map(act => {
+                                const riskColors = {
+                                    Low: 'text-emerald-500 bg-emerald-500/10 border border-emerald-500/25',
+                                    Medium: 'text-amber-500 bg-amber-500/10 border border-amber-500/25',
+                                    High: 'text-rose-500 bg-rose-500/10 border border-rose-500/25',
+                                    Critical: 'text-purple-500 bg-purple-500/10 border border-purple-500/25'
+                                };
+                                const riskBadge = act.predicted_risk ? `
+                                    <span class="px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider ${riskColors[act.predicted_risk]}">${act.predicted_risk} Risk</span>
+                                ` : '';
+                                const criticalBadge = act.is_critical_path ? `
+                                    <span class="px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider text-rose-500 bg-rose-500/10 border border-rose-500/25">Critical</span>
+                                ` : '';
+                                
+                                return `
+                                    <div draggable="true" 
+                                         ondragstart="event.dataTransfer.setData('text/plain', '${act.id}'); this.classList.add('opacity-50')"
+                                         ondragend="this.classList.remove('opacity-50')"
+                                         class="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-900 rounded-xl p-3 shadow-sm hover:shadow-md hover:border-slate-350 dark:hover:border-slate-850 transition-all cursor-grab active:cursor-grabbing space-y-2">
+                                        
+                                        <div class="flex items-start justify-between gap-2">
+                                            <span class="text-[9px] font-extrabold uppercase text-slate-450">#${act.sequence_number}</span>
+                                            <div class="flex items-center gap-1">
+                                                ${criticalBadge}
+                                                ${riskBadge}
+                                            </div>
+                                        </div>
+                                        
+                                        <h5 class="text-xs font-bold text-slate-800 dark:text-slate-100 line-clamp-2 leading-tight">
+                                            ${act.is_milestone ? '⚓' : ''} ${act.name}
+                                        </h5>
+                                        
+                                        <div class="flex items-center justify-between text-[10px] text-slate-400 pt-1.5 border-t border-slate-100 dark:border-slate-900">
+                                            <span class="font-medium flex items-center gap-1"><i class="fa-solid fa-circle-nodes opacity-65 text-sky-500"></i> ${act.completion_percentage}%</span>
+                                            <span class="font-bold text-slate-500">${act.assigned_officer ? act.assigned_officer.split(' ')[0] : 'Unassigned'}</span>
+                                        </div>
+                                        
+                                        <!-- Quick Edit Button -->
+                                        <div class="flex justify-end pt-0.5">
+                                            <button onclick="openEditActivityModal(${act.id})" class="text-[9px] font-bold px-2 py-0.5 bg-slate-50 hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-850 text-slate-500 rounded border border-slate-200 dark:border-slate-800 transition-colors">
+                                                Edit Status
+                                            </button>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += `</div>`;
+            return html;
+        }
+
+        // Tab Workspace: Live activities list & updates
+        function renderActivitiesTab() {
+            const p = store.currentProject;
+            const list = store.currentActivities || [];
+            
+            // Calculate overall stats
+            const totalTasks = list.length;
+            const completedTasks = list.filter(a => a.current_status === 'Completed').length;
+            const inProgressTasks = list.filter(a => a.current_status === 'InProgress').length;
+            const delayedTasks = list.filter(a => a.current_status === 'Delayed').length;
+            const blockedTasks = list.filter(a => a.current_status === 'Blocked').length;
+            
+            const startD = new Date(p.start_date);
+            const endD = new Date(p.expected_end_date);
+            const totalDurationMonths = Math.round((endD - startD) / (1000 * 60 * 60 * 24 * 30)) || 1;
+            
+            const pred = store.predictions || { delay_months: 0, delay_percentage: 0, risk_category: 'Low' };
+            const riskColorText = {
+                Low: 'text-emerald-500',
+                Medium: 'text-amber-500',
+                High: 'text-rose-500',
+                Critical: 'text-purple-500'
+            }[pred.risk_category] || 'text-slate-400';
+
+            const summaryHtml = totalTasks > 0 ? `
+                <div class="mt-6 bg-slate-900 text-white rounded-2xl border border-slate-800 p-6 space-y-6 shadow-md animate-fade-in">
+                    <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                        <div>
+                            <h4 class="text-sm font-extrabold uppercase tracking-wider text-sky-450">🏁 Project Completion & Performance Summary</h4>
+                            <p class="text-xs text-slate-450 mt-1">Consolidated status metrics, ML risk indicators, and sequence calculations.</p>
+                        </div>
+                        <div class="flex items-center gap-3 select-none">
+                            <span class="text-xs font-bold px-3 py-1.5 rounded-full bg-slate-800 text-slate-200">
+                                Status: <strong class="text-white">${p.current_status}</strong>
+                            </span>
+                            <span class="text-xs font-bold px-3 py-1.5 rounded-full bg-slate-800 text-slate-200">
+                                Priority: <strong class="text-white">${p.priority}</strong>
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 text-left">
+                        <!-- Stat 1 -->
+                        <div class="space-y-1">
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Baseline Timeline</p>
+                            <p class="text-sm font-semibold">${p.start_date} to ${p.expected_end_date}</p>
+                            <p class="text-xs text-slate-500">Calculated Project Span: <strong>${totalDurationMonths} months</strong></p>
+                        </div>
+                        
+                        <!-- Stat 2 -->
+                        <div class="space-y-1">
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Overall Completion</p>
+                            <div class="flex items-center gap-2 mt-1">
+                                <div class="w-24 bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                                    <div class="bg-emerald-500 h-1.5 rounded-full" style="width: ${p.overall_progress}%"></div>
+                                </div>
+                                <span class="text-xs font-bold">${p.overall_progress}%</span>
+                            </div>
+                            <p class="text-xs text-slate-500">Steps: <strong>${completedTasks} / ${totalTasks} Completed</strong></p>
+                        </div>
+
+                        <!-- Stat 3 -->
+                        <div class="space-y-1">
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Delay Forecast (ML)</p>
+                            <p class="text-sm font-semibold text-rose-450">+${pred.delay_months} Months</p>
+                            <p class="text-xs text-slate-500">Delay Factor: <strong>${pred.delay_percentage}%</strong></p>
+                        </div>
+
+                        <!-- Stat 4 -->
+                        <div class="space-y-1">
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Steering Risk Tier</p>
+                            <p class="text-sm font-extrabold ${riskColorText} uppercase">${pred.risk_category} Risk</p>
+                            <p class="text-xs text-slate-500">Active Blocked Tasks: <strong>${blockedTasks}</strong> | Delayed: <strong>${delayedTasks}</strong></p>
+                        </div>
+                    </div>
+                    
+                    <!-- Task Distribution status bar -->
+                    <div class="pt-2 text-left select-none">
+                        <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Workflow Step Distribution</p>
+                        <div class="w-full bg-slate-800 h-3 rounded-full flex overflow-hidden">
+                            ${completedTasks > 0 ? `<div class="bg-emerald-500 h-full" style="width: ${(completedTasks/totalTasks)*100}%" title="Completed"></div>` : ''}
+                            ${inProgressTasks > 0 ? `<div class="bg-blue-500 h-full" style="width: ${(inProgressTasks/totalTasks)*100}%" title="In Progress"></div>` : ''}
+                            ${delayedTasks > 0 ? `<div class="bg-amber-500 h-full" style="width: ${(delayedTasks/totalTasks)*100}%" title="Delayed"></div>` : ''}
+                            ${blockedTasks > 0 ? `<div class="bg-rose-500 h-full" style="width: ${(blockedTasks/totalTasks)*100}%" title="Blocked"></div>` : ''}
+                            ${(totalTasks - completedTasks - inProgressTasks - delayedTasks - blockedTasks) > 0 ? `<div class="bg-slate-700 h-full" style="width: ${((totalTasks - completedTasks - inProgressTasks - delayedTasks - blockedTasks)/totalTasks)*100}%" title="Not Started"></div>` : ''}
+                        </div>
+                        <div class="flex flex-wrap gap-4 text-[9px] text-slate-400 mt-2.5 font-bold uppercase">
+                            <div class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-emerald-500"></span> Completed (${completedTasks})</div>
+                            <div class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-blue-500"></span> In Progress (${inProgressTasks})</div>
+                            <div class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-amber-500"></span> Delayed (${delayedTasks})</div>
+                            <div class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-rose-500"></span> Blocked (${blockedTasks})</div>
+                            <div class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-slate-700"></span> Not Started (${totalTasks - completedTasks - inProgressTasks - delayedTasks - blockedTasks})</div>
+                        </div>
+                    </div>
+                </div>
+            ` : '';
+
+            return `
+                <div class="bg-white dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm overflow-hidden animate-slide-up">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-900 text-left">
+                        <thead class="bg-slate-50/50 dark:bg-slate-900/50">
+                            <tr class="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                                <th class="px-5 py-3">Seq</th>
+                                <th class="px-5 py-3">Task Step</th>
+                                <th class="px-5 py-3">Dates (Planned / Actual)</th>
+                                <th class="px-5 py-3">Duration (Months)</th>
+                                <th class="px-5 py-3">Status</th>
+                                <th class="px-5 py-3">Progress</th>
+                                <th class="px-5 py-3">Delay</th>
+                                <th class="px-5 py-3">Risk Tier</th>
+                                <th class="px-5 py-3 text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100 dark:divide-slate-900 text-xs">
+                            ${list.map(act => {
+                                const statusColors = {
+                                    NotStarted: 'bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-300 border border-slate-200/50 dark:border-slate-800',
+                                    InProgress: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20',
+                                    Completed: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20',
+                                    Delayed: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20',
+                                    Blocked: 'bg-rose-500/10 text-rose-600 dark:text-rose-450 border border-rose-500/20'
+                                };
+                                const riskColors = {
+                                    Low: 'text-emerald-600 dark:text-emerald-400',
+                                    Medium: 'text-amber-600 dark:text-amber-400',
+                                    High: 'text-rose-600 dark:text-rose-400',
+                                    Critical: 'text-purple-600 dark:text-purple-400'
+                                };
+                                
+                                // Calculate duration in months from dates
+                                const pStart = new Date(act.planned_start_date);
+                                const pEnd = new Date(act.planned_end_date);
+                                const durationMonths = Math.round((pEnd - pStart) / (1000 * 60 * 60 * 24 * 30));
+
+                                return `
+                                    <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors">
+                                        <td class="px-5 py-4 font-semibold text-slate-400">${act.sequence_number}</td>
+                                        <td class="px-5 py-4">
+                                            <p class="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                                                ${act.is_milestone ? '<i class="fa-solid fa-flag text-sky-500 text-xs"></i>' : ''}
+                                                ${act.name}
+                                            </p>
+                                            <p class="text-[10px] text-slate-400 mt-0.5">Dept: ${act.assigned_department || 'General'} | Category: ${act.category}</p>
+                                        </td>
+                                        <td class="px-5 py-4 space-y-1">
+                                            <p class="text-[10px] text-slate-400">Planned: ${act.planned_start_date} to ${act.planned_end_date}</p>
+                                            <p class="text-[10px] font-bold text-slate-800 dark:text-slate-200">
+                                                Actual: ${act.actual_start_date || 'N/A'} to ${act.actual_end_date || 'N/A'}
+                                            </p>
+                                        </td>
+                                        <td class="px-5 py-4">
+                                            <input type="text" value="${durationMonths === 0 ? 'nil' : durationMonths}" 
+                                                onchange="changeActivityDuration(${act.id}, '${act.planned_start_date}', this.value)" 
+                                                class="w-16 px-2.5 py-1 text-xs text-center border border-slate-200 dark:border-slate-850 rounded bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white font-extrabold focus:outline-none focus:ring-2 focus:ring-sky-500/20">
+                                        </td>
+                                        <td class="px-5 py-4">
+                                            <span class="text-[9px] font-black px-2.5 py-1 rounded-full border ${statusColors[act.current_status]} uppercase tracking-wider">${act.current_status}</span>
+                                        </td>
+                                        <td class="px-5 py-4">
+                                            <div class="flex items-center gap-2">
+                                                <div class="w-16 bg-slate-100 dark:bg-slate-900 border border-slate-200/20 h-1.5 rounded-full overflow-hidden">
+                                                    <div class="bg-sky-500 h-1.5 rounded-full" style="width: ${act.completion_percentage}%"></div>
+                                                </div>
+                                                <span class="text-[10px] font-bold text-slate-500">${act.completion_percentage}%</span>
+                                            </div>
+                                        </td>
+                                        <td class="px-5 py-4 font-bold text-slate-900 dark:text-white">
+                                            ${act.current_delay_days > 0 ? `<span class="text-rose-500 font-extrabold">+${act.current_delay_days}d</span>` : '-'}
+                                        </td>
+                                        <td class="px-5 py-4 font-black text-[10px] uppercase tracking-wider ${riskColors[act.predicted_risk] || 'text-slate-400'}">
+                                            ${act.predicted_risk ? act.predicted_risk : '-'}
+                                        </td>
+                                        <td class="px-5 py-4 text-right">
+                                            <button onclick="openEditActivityModal(${act.id})" class="text-[10px] font-bold px-3 py-1.5 bg-slate-50 hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-850 text-slate-700 dark:text-slate-200 rounded border border-slate-200 dark:border-slate-800 transition-all shadow-sm">Edit</button>
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+                ${summaryHtml}
+
+                <!-- Edit Activity Modal -->
+                <div id="editActivityModal" class="fixed inset-0 z-50 overflow-y-auto hidden" role="dialog" aria-modal="true">
+                    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                        <div class="fixed inset-0 bg-slate-950/70 dark:bg-slate-950/90 backdrop-blur-sm transition-opacity" onclick="closeEditActivityModal()"></div>
+                        <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+                        <div class="inline-block align-middle bg-white dark:bg-slate-950 rounded-2xl text-left overflow-hidden shadow-2xl transform transition-all sm:my-8 sm:align-middle sm:max-w-md sm:w-full border border-slate-200 dark:border-slate-900">
+                            <form id="editActivityForm" onsubmit="event.preventDefault(); submitEditActivityForm(this);">
+                                <input type="hidden" name="activity_id">
+                                <div class="px-6 py-5 border-b border-slate-100 dark:border-slate-900 flex items-center justify-between">
+                                    <div class="space-y-0.5">
+                                        <h3 class="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">Update Activity Status</h3>
+                                        <p class="text-[10px] text-slate-455">Apply progress updates and remarks to the active database.</p>
+                                    </div>
+                                    <button type="button" onclick="closeEditActivityModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors">
+                                        <i class="fa-solid fa-xmark"></i>
+                                    </button>
+                                </div>
+                                <div class="px-6 py-4 space-y-4">
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Status</label>
+                                            <select name="current_status" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none cursor-pointer">
+                                                <option value="NotStarted">NotStarted</option>
+                                                <option value="InProgress">InProgress</option>
+                                                <option value="Completed">Completed</option>
+                                                <option value="Delayed">Delayed</option>
+                                                <option value="Blocked">Blocked</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Completion %</label>
+                                            <input type="number" name="completion_percentage" min="0" max="100" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none">
+                                        </div>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Actual Start Date</label>
+                                            <input type="date" name="actual_start_date" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Actual End Date</label>
+                                            <input type="date" name="actual_end_date" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none">
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Remarks / Change Reasons</label>
+                                        <textarea name="remarks" rows="2" placeholder="Describe delay causes, testing logs or scope additions..." class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none"></textarea>
+                                    </div>
+                                </div>
+                                <div class="px-6 py-4 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-900 flex justify-end gap-3 rounded-b-2xl">
+                                    <button type="button" onclick="closeEditActivityModal()" class="px-4 py-2 border border-slate-250 dark:border-slate-800 rounded-lg text-xs font-bold text-slate-650 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shadow-sm">Cancel</button>
+                                    <button type="submit" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm">Apply Changes</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Tab Workspace: Gantt Chart Visualization
+        function renderGanttTab() {
+            if (!store.ganttData || store.ganttData.activities.length === 0) {
+                return `<div class="p-6 text-center text-slate-500">Generating Gantt timeline...</div>`;
+            }
+
+            const g = store.ganttData.activities;
+            
+            // Calculate project boundaries
+            let minTime = Infinity;
+            let maxTime = -Infinity;
+            g.forEach(act => {
+                if (act.start_date) {
+                    const t = new Date(act.start_date).getTime();
+                    if (t < minTime) minTime = t;
+                }
+                if (act.end_date) {
+                    const t = new Date(act.end_date).getTime();
+                    if (t > maxTime) maxTime = t;
+                }
+            });
+            
+            const oneDay = 24 * 60 * 60 * 1000;
+            const oneMonth = 30 * oneDay;
+            if (minTime === Infinity) minTime = new Date().getTime();
+            if (maxTime === -Infinity) maxTime = new Date().getTime() + 12 * oneMonth;
+            
+            // Pad by 7 days start and end for safety margin
+            minTime -= 7 * oneDay;
+            maxTime += 7 * oneDay;
+            
+            const totalDuration = maxTime - minTime;
+            const timelineWidth = 600; // SVG timeline width
+            const labelWidth = 220;    // Width for row labels
+            
+            const rowHeight = 36;
+            const height = g.length * rowHeight + 45;
+            const width = labelWidth + timelineWidth + 30;
+            
+            // Generate monthly grid markers
+            let gridLines = '';
+            let monthLabels = '';
+            let currentDate = new Date(minTime);
+            const endDate = new Date(maxTime);
+            
+            const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            
+            while (currentDate < endDate) {
+                const t = currentDate.getTime();
+                const pct = (t - minTime) / totalDuration;
+                const x = labelWidth + pct * timelineWidth;
+                
+                // Draw vertical line
+                gridLines += `<line x1="${x}" y1="30" x2="${x}" y2="${height}" stroke="#e2e8f0" class="dark:stroke-slate-800" stroke-width="1" stroke-dasharray="2 2" />`;
+                
+                // Label month
+                monthLabels += `<text x="${x + 8}" y="20" font-size="9" font-weight="800" fill="#94a3b8" class="uppercase select-none">${monthNames[currentDate.getMonth()]} '${String(currentDate.getFullYear()).slice(-2)}</text>`;
+                
+                // Advance to next month
+                currentDate.setMonth(currentDate.getMonth() + 1);
+            }
+
+            let svgRows = '';
+            g.forEach((act, idx) => {
+                const y = 35 + (idx * rowHeight);
+                let startX = labelWidth + 20;
+                let barWidth = 60;
+                
+                if (act.start_date && act.end_date) {
+                    const sTime = new Date(act.start_date).getTime();
+                    const eTime = new Date(act.end_date).getTime();
+                    const leftPct = (sTime - minTime) / totalDuration;
+                    const widthPct = (eTime - sTime) / totalDuration;
+                    startX = labelWidth + leftPct * timelineWidth;
+                    barWidth = Math.max(12, widthPct * timelineWidth);
+                }
+                
+                const isCompleted = act.status === 'Completed';
+                const baseColor = act.is_critical ? '#ef4444' : (isCompleted ? '#10b981' : '#3b82f6');
+                const progressWidth = barWidth * act.progress;
+                
+                // Draw zebra strip background for rows
+                gridLines += `<rect x="0" y="${y - 5}" width="${width}" height="${rowHeight}" fill="${idx % 2 === 0 ? 'rgba(241, 245, 249, 0.2)' : 'transparent'}" class="${idx % 2 === 0 ? 'dark:fill-slate-900/10' : ''}" />`;
+                
+                // Task name labels
+                const criticalSymbol = act.is_critical ? `<tspan fill="#ef4444" font-weight="900">[!] </tspan>` : '';
+                svgRows += `
+                    <text x="10" y="${y + 16}" font-size="11" font-weight="700" fill="#475569" class="dark:fill-slate-350 select-none">
+                        ${criticalSymbol}${act.text.length > 25 ? act.text.substring(0, 23) + '..' : act.text}
+                    </text>
+                `;
+                
+                // Draw bar or milestone (diamond)
+                if (act.is_milestone) {
+                    const diamondX = startX;
+                    const diamondY = y + 8;
+                    const size = 12;
+                    const points = `${diamondX},${diamondY - size} ${diamondX + size},${diamondY} ${diamondX},${diamondY + size} ${diamondX - size},${diamondY}`;
+                    
+                    svgRows += `
+                        <polygon points="${points}" fill="${baseColor}" class="cursor-pointer transition-all hover:scale-110" onclick="openEditActivityModal(${act.id})" />
+                        <text x="${diamondX + 16}" y="${y + 12}" font-size="9" font-weight="800" fill="#94a3b8" class="uppercase select-none">Milestone</text>
+                    `;
+                } else {
+                    // Task bar background
+                    svgRows += `
+                        <rect x="${startX}" y="${y + 2}" width="${barWidth}" height="14" rx="4" fill="${baseColor}" opacity="0.2" class="cursor-pointer" onclick="openEditActivityModal(${act.id})" />
+                    `;
+                    // Task bar progress inner
+                    if (progressWidth > 0) {
+                        svgRows += `
+                            <rect x="${startX}" y="${y + 2}" width="${progressWidth}" height="14" rx="4" fill="${baseColor}" class="cursor-pointer" onclick="openEditActivityModal(${act.id})" />
+                        `;
+                    }
+                    // Add text inside bar if width allows, or after bar
+                    const showText = `${Math.round(act.progress * 100)}%`;
+                    svgRows += `
+                        <text x="${startX + barWidth + 8}" y="${y + 12}" font-size="9" font-weight="bold" fill="#64748b" class="dark:fill-slate-400 select-none">${showText} (${act.assignee})</text>
+                    `;
+                }
+            });
+
+            return `
+                <div class="bg-white dark:bg-slate-950 p-6 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm flex flex-col animate-slide-up">
+                    <div class="mb-4 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-900 pb-3">
+                        <div class="space-y-0.5">
+                            <h4 class="font-bold text-slate-850 dark:text-white text-sm flex items-center gap-1.5"><i class="fa-solid fa-timeline text-sky-600 dark:text-sky-500"></i> Shipbuilding Work Breakdown Schedule</h4>
+                            <p class="text-xs text-slate-400">Interactive live scheduling chart scaled to planned calendar dates.</p>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-4 text-[10px] font-bold select-none uppercase">
+                            <div class="flex items-center gap-1.5"><span class="h-3 w-5 bg-rose-500 rounded border border-rose-600 block"></span> Critical Path</div>
+                            <div class="flex items-center gap-1.5"><span class="h-3 w-5 bg-emerald-500 rounded border border-emerald-600 block"></span> Completed</div>
+                            <div class="flex items-center gap-1.5"><span class="h-3 w-5 bg-blue-500 rounded border border-blue-600 block"></span> On Track</div>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto border border-slate-200 dark:border-slate-900 rounded-xl p-3 bg-slate-50 dark:bg-slate-900/25">
+                        <svg width="${width}" height="${height}" class="min-w-full">
+                            <!-- Draw Grid Background -->
+                            ${gridLines}
+                            <!-- Month labels header background -->
+                            <rect x="0" y="0" width="${width}" height="30" fill="rgba(248, 250, 252, 0.8)" class="dark:fill-slate-950/80" />
+                            <line x1="0" y1="30" x2="${width}" y2="30" stroke="#cbd5e1" class="dark:stroke-slate-800" stroke-width="1.2" />
+                            <line x1="${labelWidth}" y1="0" x2="${labelWidth}" y2="${height}" stroke="#cbd5e1" class="dark:stroke-slate-800" stroke-width="1.2" />
+                            
+                            <!-- Header labels -->
+                            <text x="10" y="20" font-size="10" font-weight="900" fill="#0c4a6e" class="dark:fill-sky-500 uppercase tracking-wider select-none">Acquisition Steps</text>
+                            ${monthLabels}
+                            
+                            <!-- SVG Rows and bars -->
+                            ${svgRows}
+                        </svg>
+                    </div>
+                </div>
+            `;
+        }        // Tab Workspace: Dependency Graph Visualization
+        function buildDependencyGraphSvg(activities, feedbackLoops, isTemplateMode = false) {
+            if (!activities || activities.length === 0) {
+                return `<div class="p-6 text-center text-slate-500 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl">No activities to display in graph.</div>`;
+            }
+
+            // 1. Normalize activities and dependencies to sequence numbers
+            const seqToAct = {};
+            const idToSeq = {};
+            activities.forEach(a => {
+                seqToAct[a.sequence_number] = a;
+                if (!isTemplateMode) {
+                    idToSeq[a.id] = a.sequence_number;
+                }
+            });
+
+            const normalized = activities.map(a => {
+                let deps = [];
+                if (isTemplateMode) {
+                    deps = a.dependency_list || [];
+                } else {
+                    const rawDeps = a.dependency_list || [];
+                    rawDeps.forEach(depId => {
+                        if (idToSeq[depId] !== undefined) {
+                            deps.push(idToSeq[depId]);
+                        }
+                    });
+                }
+                return {
+                    id: a.id || a.sequence_number,
+                    sequence_number: a.sequence_number,
+                    name: a.name,
+                    category: a.category,
+                    default_duration_months: a.default_duration_months,
+                    historical_risk_weight: a.historical_risk_weight,
+                    is_milestone: a.is_milestone,
+                    is_critical_path: a.is_critical_path,
+                    current_status: isTemplateMode ? 'NotStarted' : (a.current_status || 'NotStarted'),
+                    planned_start_date: isTemplateMode ? '' : (a.planned_start_date || ''),
+                    dependency_list: deps // list of sequence numbers
+                };
+            });
+
+            // Maps and sets for topological layout
+            const normSeqToAct = {};
+            normalized.forEach(a => { normSeqToAct[a.sequence_number] = a; });
+
+            const inDegree = {};
+            const adj = {};
+            normalized.forEach(a => {
+                inDegree[a.sequence_number] = 0;
+                adj[a.sequence_number] = [];
+            });
+
+            normalized.forEach(a => {
+                const deps = a.dependency_list || [];
+                deps.forEach(depSeq => {
+                    if (normSeqToAct[depSeq]) {
+                        adj[depSeq].push(a.sequence_number);
+                        inDegree[a.sequence_number]++;
+                    }
+                });
+            });
+
+            // Assign layers
+            const queue = [];
+            const layers = {};
+            normalized.forEach(a => {
+                if (inDegree[a.sequence_number] === 0) {
+                    queue.push({ seq: a.sequence_number, layer: 0 });
+                }
+            });
+
+            let maxLayer = 0;
+            const visited = {};
+            while (queue.length > 0) {
+                const { seq, layer } = queue.shift();
+                layers[seq] = Math.max(layers[seq] || 0, layer);
+                if (layers[seq] > maxLayer) maxLayer = layers[seq];
+
+                const neighbors = adj[seq] || [];
+                neighbors.forEach(neighSeq => {
+                    layers[neighSeq] = Math.max(layers[neighSeq] || 0, layers[seq] + 1);
+                    if (!visited[neighSeq]) {
+                        queue.push({ seq: neighSeq, layer: layers[neighSeq] });
+                    }
+                });
+                visited[seq] = true;
+            }
+
+            const layerGroups = {};
+            for (let i = 0; i <= maxLayer; i++) {
+                layerGroups[i] = [];
+            }
+            normalized.forEach(a => {
+                const layer = layers[a.sequence_number] !== undefined ? layers[a.sequence_number] : 0;
+                if (!layerGroups[layer]) layerGroups[layer] = [];
+                layerGroups[layer].push(a);
+            });
+
+            for (const layer in layerGroups) {
+                layerGroups[layer].sort((a, b) => a.sequence_number - b.sequence_number);
+            }
+
+            // Coordinates
+            const cardWidth = 200;
+            const cardHeight = 80;
+            const horizontalGap = 80;
+            const verticalGap = 30;
+            const paddingX = 30;
+            const paddingY = 30;
+
+            const nodeCoords = {}; // sequence_number -> {x, y}
+            let maxNodesInLayer = 0;
+
+            for (let layer = 0; layer <= maxLayer; layer++) {
+                const nodes = layerGroups[layer] || [];
+                if (nodes.length > maxNodesInLayer) maxNodesInLayer = nodes.length;
+
+                nodes.forEach((act, idx) => {
+                    const x = paddingX + layer * (cardWidth + horizontalGap);
+                    const y = paddingY + idx * (cardHeight + verticalGap);
+                    nodeCoords[act.sequence_number] = { x, y };
+                });
+            }
+
+            const svgWidth = paddingX * 2 + (maxLayer + 1) * (cardWidth + horizontalGap) - horizontalGap;
+            const svgHeight = paddingY * 2 + maxNodesInLayer * (cardHeight + verticalGap) - verticalGap + 90;
+
+            // Connections
+            let svgPaths = '';
+            normalized.forEach(a => {
+                const deps = a.dependency_list || [];
+                const toCoord = nodeCoords[a.sequence_number];
+                if (!toCoord) return;
+
+                deps.forEach(depSeq => {
+                    const fromCoord = nodeCoords[depSeq];
+                    if (!fromCoord) return;
+
+                    const xStart = fromCoord.x + cardWidth;
+                    const yStart = fromCoord.y + cardHeight / 2;
+                    const xEnd = toCoord.x;
+                    const yEnd = toCoord.y + cardHeight / 2;
+
+                    const isCritical = a.is_critical_path && normSeqToAct[depSeq] && normSeqToAct[depSeq].is_critical_path;
+                    const strokeColor = isCritical ? 'rgb(244, 63, 94)' : '#94a3b8';
+                    const strokeWidth = isCritical ? '3' : '1.8';
+
+                    svgPaths += `
+                        <path d="M ${xStart} ${yStart} C ${xStart + 40} ${yStart}, ${xEnd - 40} ${yEnd}, ${xEnd} ${yEnd}"
+                              fill="none" stroke="${strokeColor}" stroke-width="${strokeWidth}" marker-end="url(#arrow)" />
+                    `;
+                });
+            });
+
+            // Loops
+            let svgLoops = '';
+            feedbackLoops.forEach((l, idx) => {
+                const fromCoord = nodeCoords[l.from_seq];
+                const toCoord = nodeCoords[l.to_seq];
+                if (!fromCoord || !toCoord) return;
+
+                const xStart = fromCoord.x + cardWidth / 2;
+                const yStart = fromCoord.y + cardHeight;
+                const xEnd = toCoord.x + cardWidth / 2;
+                const yEnd = toCoord.y + cardHeight;
+
+                const loopIndex = idx + 1;
+                const sweepY = Math.max(45, 40 + loopIndex * 20);
+
+                svgLoops += `
+                    <path d="M ${xStart} ${yStart} C ${xStart} ${yStart + sweepY}, ${xEnd} ${yEnd + sweepY}, ${xEnd} ${yEnd}"
+                          fill="none" stroke="#a855f7" stroke-width="2" stroke-dasharray="5,4" marker-end="url(#arrow-loop)" />
+                    
+                    <rect x="${(xStart + xEnd)/2 - 50}" y="${yStart + sweepY - 12}" width="100" height="13" rx="3" fill="#fcfaff" stroke="#e9d5ff" stroke-width="0.5" />
+                    <text x="${(xStart + xEnd)/2}" y="${yStart + sweepY - 3}" font-size="8" font-weight="bold" fill="#7e22ce" text-anchor="middle" class="select-none">
+                        Rework Loop (${l.from_seq} ➔ ${l.to_seq})
+                    </text>
+                `;
+            });
+
+            // Nodes
+            let svgNodes = '';
+            normalized.forEach(a => {
+                const coord = nodeCoords[a.sequence_number];
+                if (!coord) return;
+
+                let statusBorder = '';
+                let extraHtml = '';
+                
+                if (isTemplateMode) {
+                    // Color-code by category in template builder
+                    const categoryColors = {
+                        Technical: 'border-indigo-500 bg-indigo-50/20 text-indigo-950 dark:text-indigo-300',
+                        Procurement: 'border-amber-500 bg-amber-50/20 text-amber-955 dark:text-amber-300',
+                        Construction: 'border-emerald-500 bg-emerald-50/20 text-emerald-955 dark:text-emerald-300',
+                        Inspection: 'border-teal-500 bg-teal-50/20 text-teal-955 dark:text-teal-300',
+                        Testing: 'border-purple-500 bg-purple-50/20 text-purple-955 dark:text-purple-300',
+                        Delivery: 'border-rose-500 bg-rose-50/20 text-rose-955 dark:text-rose-300',
+                        Administrative: 'border-sky-500 bg-sky-50/20 text-sky-955 dark:text-sky-300',
+                        Documentation: 'border-slate-500 bg-slate-50/20 text-slate-955 dark:text-slate-350'
+                    };
+                    statusBorder = categoryColors[a.category] || 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/10 text-slate-700';
+                    extraHtml = `<span>Duration: ${a.default_duration_months}m</span><span>Risk: ${a.historical_risk_weight}%</span>`;
+                } else {
+                    const statusColorBorders = {
+                        Completed: 'border-emerald-500 bg-emerald-50/20 text-emerald-955 dark:text-emerald-300',
+                        InProgress: 'border-blue-500 bg-blue-50/20 text-blue-955 dark:text-blue-300',
+                        Delayed: 'border-amber-500 bg-amber-50/20 text-amber-955 dark:text-amber-300',
+                        Blocked: 'border-rose-500 bg-rose-50/20 text-rose-955 dark:text-rose-300',
+                        NotStarted: 'border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900/10 text-slate-700 dark:text-slate-400'
+                    };
+                    statusBorder = statusColorBorders[a.current_status] || statusColorBorders.NotStarted;
+                    extraHtml = `<span>Plan: ${a.planned_start_date ? a.planned_start_date.split('-')[2]+'/'+a.planned_start_date.split('-')[1] : '-'}</span><span>Status: ${a.current_status}</span>`;
+                }
+
+                const pathHighlight = a.is_critical_path ? 'ring-2 ring-rose-500 ring-offset-1 dark:ring-offset-slate-950' : '';
+                const clickHandler = isTemplateMode ? '' : `onclick="openEditActivityModal(${a.id})"`;
+
+                svgNodes += `
+                    <g transform="translate(${coord.x}, ${coord.y})" class="${isTemplateMode ? 'cursor-default' : 'cursor-pointer'}" ${clickHandler}>
+                        <foreignObject width="${cardWidth}" height="${cardHeight}">
+                            <div xmlns="http://www.w3.org/1999/xhtml" class="h-full w-full rounded-xl border-2 p-2 flex flex-col justify-between shadow-sm select-none transition-all hover:scale-102 hover:shadow-md ${statusBorder} ${pathHighlight}">
+                                <div class="flex items-start justify-between">
+                                    <span class="text-[8px] font-extrabold uppercase tracking-wider opacity-60">Task #${a.sequence_number}</span>
+                                    <span class="text-[8px] font-bold px-1.5 py-0.5 rounded bg-slate-200/50 dark:bg-slate-800/80">${a.category}</span>
+                                </div>
+                                <h6 class="font-extrabold text-[10px] leading-tight truncate mt-1 flex items-center gap-1">
+                                    ${a.is_milestone ? '⚓' : ''} ${a.name}
+                                </h6>
+                                <div class="flex items-center justify-between text-[8px] mt-1 font-semibold opacity-75">
+                                    ${extraHtml}
+                                </div>
+                            </div>
+                        </foreignObject>
+                    </g>
+                `;
+            });
+
+            return `
+                <svg width="${svgWidth}" height="${svgHeight}" class="min-w-full">
+                    <defs>
+                        <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                            <path d="M 0 1 L 10 5 L 0 9 z" fill="#94a3b8" />
+                        </marker>
+                        <marker id="arrow-loop" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                            <path d="M 0 1 L 10 5 L 0 9 z" fill="#a855f7" />
+                        </marker>
+                    </defs>
+                    ${svgPaths}
+                    ${svgLoops}
+                    ${svgNodes}
+                </svg>
+            `;
+        }
+
+        function renderDependencyGraphTab() {
+            const p = store.currentProject;
+            const activities = store.currentActivities || [];
+            if (activities.length === 0) {
+                return `<div class="p-6 text-center text-slate-500 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl">No activities available to graph.</div>`;
+            }
+            return `
+                <div class="bg-white dark:bg-slate-950 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col">
+                    <div class="mb-4 flex items-center justify-between">
+                        <div>
+                            <h4 class="font-bold text-slate-850 dark:text-white">Workflow Topological Diagram</h4>
+                            <p class="text-xs text-slate-400 mt-0.5">Interactive topological map showing task execution sequence, parallel paths, and rework loops.</p>
+                        </div>
+                        <div class="flex flex-wrap gap-3 text-[10px] font-bold select-none">
+                            <div class="flex items-center gap-1.5"><span class="h-3 w-5 bg-rose-500 rounded border border-rose-600 block"></span> Critical Path</div>
+                            <div class="flex items-center gap-1.5"><span class="h-3 w-5 bg-purple-500 rounded border border-purple-600 block border-dashed"></span> Rework Loop</div>
+                            <div class="flex items-center gap-1.5"><span class="h-3 w-5 bg-blue-500/20 rounded border border-blue-500 block"></span> In Progress</div>
+                            <div class="flex items-center gap-1.5"><span class="h-3 w-5 bg-emerald-500/20 rounded border border-emerald-500 block"></span> Completed</div>
+                        </div>
+                    </div>
+                    
+                    <div class="overflow-auto border border-slate-100 dark:border-slate-850 rounded-xl p-4 bg-slate-50 dark:bg-slate-900/25">
+                        ${buildDependencyGraphSvg(activities, p.feedback_loops || [], false)}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Tab Workspace: ML Prediction Details
+        function renderPredictionsTab() {
+            if (!store.predictions) {
+                return `
+                    <div class="p-6 text-center text-slate-500 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl">
+                        <i class="fa-solid fa-triangle-exclamation text-rose-500 text-3xl mb-2"></i>
+                        <p class="font-medium text-slate-850 dark:text-white">ML Models Not Loaded</p>
+                        <p class="text-xs text-slate-400 mt-1">Please retrain the pipeline models from the CLI dashboard first.</p>
+                    </div>
+                `;
+            }
+
+            const pred = store.predictions;
+            
+            return `
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- Left: Predictions & drivers -->
+                    <div class="lg:col-span-2 space-y-6">
+                        <!-- Primary Drivers list -->
+                        <div class="bg-white dark:bg-slate-950 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+                            <h4 class="font-bold text-slate-850 dark:text-white border-b border-slate-100 dark:border-slate-850 pb-2">🔍 Top Delay Driver Deviations</h4>
+                            <div class="space-y-4">
+                                ${pred.top_drivers.map((d, idx) => {
+                                    const devVal = d.deviation_pct;
+                                    const barWidth = Math.min(100, Math.max(10, d.risk_score * 10.0));
+                                    const featName = d.feature.replace(/_/g, ' ');
+                                    return `
+                                        <div class="space-y-1">
+                                            <div class="flex items-center justify-between text-xs">
+                                                <span class="font-bold capitalize">${idx + 1}. ${featName}</span>
+                                                <span class="text-slate-400 font-semibold">Value: ${d.value} vs ${d.baseline} baseline (+${devVal}%)</span>
+                                            </div>
+                                            <!-- risk severity progress bar -->
+                                            <div class="w-full bg-slate-100 dark:bg-slate-900 h-2.5 rounded-full overflow-hidden">
+                                                <div class="bg-rose-500 h-2.5 rounded-full" style="width: ${barWidth}%"></div>
+                                            </div>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </div>
+
+                        <!-- Historical Prediction Trend Log -->
+                        <div class="bg-white dark:bg-slate-950 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+                            <h4 class="font-bold text-slate-850 dark:text-white border-b border-slate-100 dark:border-slate-850 pb-2">📈 Program Risk History Logs</h4>
+                            <div class="overflow-x-auto border border-slate-100 dark:border-slate-850 rounded-xl">
+                                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-850 text-left">
+                                    <thead class="bg-slate-50 dark:bg-slate-900/50 text-xs font-bold text-slate-400 uppercase">
+                                        <tr>
+                                            <th class="px-4 py-3">Logged Date</th>
+                                            <th class="px-4 py-3">Progress</th>
+                                            <th class="px-4 py-3">Delay %</th>
+                                            <th class="px-4 py-3">Months</th>
+                                            <th class="px-4 py-3">Risk Tier</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-100 dark:divide-slate-850 text-xs">
+                                        ${store.predictionHistory.length === 0 ? `
+                                            <tr>
+                                                <td colspan="5" class="p-4 text-center text-slate-500">No predictions recorded yet. Update activities to trigger models.</td>
+                                            </tr>
+                                        ` : store.predictionHistory.map(ph => `
+                                            <tr>
+                                                <td class="px-4 py-3 font-semibold">${ph.predicted_at.split('T')[0]}</td>
+                                                <td class="px-4 py-3">${ph.project_progress_pct}%</td>
+                                                <td class="px-4 py-3 font-bold">${ph.delay_percentage}%</td>
+                                                <td class="px-4 py-3">${ph.delay_months}m</td>
+                                                <td class="px-4 py-3 font-bold">${ph.risk_category}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: PMG Action recommendations -->
+                    <div class="bg-white dark:bg-slate-950 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4 flex flex-col">
+                        <h4 class="font-bold text-slate-850 dark:text-white border-b border-slate-100 dark:border-slate-850 pb-2">🛡️ PMG Action Mitigation Plan</h4>
+                        <div class="space-y-4 flex-1 overflow-y-auto">
+                            ${pred.recommendations.map(r => {
+                                const borderColors = {
+                                    Critical: 'border-l-4 border-rose-500 bg-rose-50/50 dark:bg-rose-950/10 text-rose-900 dark:text-rose-300',
+                                    High: 'border-l-4 border-amber-500 bg-amber-50/50 dark:bg-amber-950/10 text-amber-900 dark:text-amber-300',
+                                    Medium: 'border-l-4 border-sky-500 bg-sky-50/50 dark:bg-sky-950/10 text-sky-900 dark:text-sky-300',
+                                    Low: 'border-l-4 border-slate-300 bg-slate-50/50 dark:bg-slate-900/10 text-slate-900 dark:text-slate-350'
+                                };
+                                return `
+                                    <div class="p-3.5 rounded-lg ${borderColors[r.priority] || 'border border-slate-200'} space-y-1">
+                                        <div class="flex items-center justify-between text-xs font-bold">
+                                            <span class="uppercase tracking-wider opacity-85">${r.category}</span>
+                                            <span>${r.priority}</span>
+                                        </div>
+                                        <p class="text-xs leading-relaxed opacity-90">${r.recommendation}</p>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Initialize application
+        function initApp() {
+            if (store.token) {
+                if (store.user.role === 'Admin' && store.user.is_first_login) {
+                    navigate('template-builder');
+                } else {
+                    navigate('dashboard');
+                }
+            } else {
+                navigate('login');
+            }
+        }
+
+        // Initial setup
+        initApp();
+    </script>
+</body>
+</html>

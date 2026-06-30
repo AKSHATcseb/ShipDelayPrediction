@@ -1,0 +1,77 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nosenv
+.gamma
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+...
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Database files
+database/*.db
+database/*.db-shm
+database/*.db-wal
+database/*.db-journal
+database/*.sqlite
+*.db
+*.sqlite
+
+# ML Pipeline output datasets, trained models, and diagnostic plots
+# (These can be regenerated using run_pipeline.py)
+data/*.csv
+data/*.json
+models/*.pkl
+plots/*.png
+logs/*.log
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store

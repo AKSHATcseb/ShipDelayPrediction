@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  pmis:
+    build: .
+    container_name: navy_ship_pmis
+    ports:
+      - "8000:8000"
+    volumes:
+      - pmis-db-volume:/app/database
+    environment:
+      - SECRET_KEY=naval-steering-committee-super-secure-key
+      - JWT_EXPIRY_MINUTES=480
+      - DEFAULT_ADMIN_USERNAME=admin
+      - DEFAULT_ADMIN_PASSWORD=admin
+    restart: always
+
+volumes:
+  pmis-db-volume:
