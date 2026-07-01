@@ -55,6 +55,8 @@ class ProjectActivity(Base):
 
     # Delay & Risk
     current_delay_days = Column(Integer, default=0, nullable=False)
+    duration_months = Column(Float, default=1.0, nullable=False)
+    remaining_months = Column(Float, default=1.0, nullable=False)
     historical_risk_weight = Column(Float, default=50.0, nullable=False)
     predicted_risk = Column(String(50), nullable=True)
 

@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from backend.config import CORS_ORIGINS, HOST, PORT
-from backend.database import init_db, SessionLocal
+from backend.database import init_db, SessionLocal, migrate_database
 from backend.seed import seed_database
 
 # Import routers
@@ -55,6 +55,10 @@ def startup_event():
     # Initialize SQL database tables
     logger.info("Initializing SQL database schemas...")
     init_db()
+    
+    # Run database migrations
+    logger.info("Running database migrations...")
+    migrate_database()
     
     # Run seed script
     db = SessionLocal()

@@ -138,6 +138,8 @@ def create_project(db: Session, project_data: Dict[str, Any], manager_id: Option
             historical_risk_weight=s_act["historical_risk_weight"],
             is_milestone=s_act["is_milestone"],
             is_critical_path=s_act["is_critical_path"],
+            duration_months=float(s_act.get("default_duration_months", 1.0)),
+            remaining_months=float(s_act.get("default_duration_months", 1.0)),
             dependency_list=[] # We'll populate this in a second pass using seq_to_live_id
         )
         db.add(activity)

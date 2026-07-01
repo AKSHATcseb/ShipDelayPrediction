@@ -214,6 +214,8 @@ class ActivityUpdate(BaseModel):
     planned_start_date: Optional[date] = None
     planned_end_date: Optional[date] = None
     change_reason: Optional[str] = None
+    duration_months: Optional[float] = None
+    remaining_months: Optional[float] = None
 
 
 class ActivityResponse(BaseModel):
@@ -239,6 +241,8 @@ class ActivityResponse(BaseModel):
     predicted_risk: Optional[str] = None
     is_milestone: bool
     is_critical_path: bool
+    duration_months: float
+    remaining_months: float
     created_at: datetime
     updated_at: datetime
 

@@ -92,13 +92,33 @@ def get_summary(db: Session = Depends(get_db), current_user = Depends(get_curren
     ).order_by(ProjectActivity.planned_end_date.asc()).limit(5).all()
     
     for ms in milestones:
+        # Calculate delay chance based on project's predicted delay percentage and activity risk weight
+        latest_pred = ms.project.predictions[0] if ms.project.predictions else None
+        proj_delay_pct = latest_pred.delay_percentage if latest_pred else 15.0
+        
+        has_delayed_pred = False
+        for dep_id in ms.dependency_list or []:
+            dep = db.query(ProjectActivity).filter(ProjectActivity.id == dep_id).first()
+            if dep and dep.current_status in [ActivityStatus.DELAYED, ActivityStatus.BLOCKED]:
+                has_delayed_pred = True
+                break
+                
+        if has_delayed_pred:
+            delay_chance = max(80.0, proj_delay_pct + 20.0)
+        else:
+            weight_factor = ms.historical_risk_weight / 50.0
+            delay_chance = proj_delay_pct * weight_factor
+            
+        delay_chance = round(max(5.0, min(99.0, delay_chance)), 1)
+        
         upcoming_milestones.append({
             "id": ms.id,
             "project_id": ms.project_id,
             "project_name": ms.project.project_name,
             "milestone_name": ms.name,
             "planned_end_date": ms.planned_end_date,
-            "status": ms.current_status.value
+            "status": ms.current_status.value,
+            "delay_chance_pct": delay_chance
         })
 
     return {

@@ -36,22 +36,86 @@
     <link rel="stylesheet" href="assets/custom.css">
     <style>
         body {
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            text-rendering: optimizeLegibility;
+            -webkit-font-smoothing: antialiased;
         }
         /* Custom scrollbar for clean UI */
         ::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
+            width: 5px;
+            height: 5px;
         }
         ::-webkit-scrollbar-track {
             background: transparent;
         }
         ::-webkit-scrollbar-thumb {
             background: #cbd5e1;
-            border-radius: 3px;
+            border-radius: 9999px;
         }
         .dark ::-webkit-scrollbar-thumb {
+            background: #334155;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+        .dark ::-webkit-scrollbar-thumb:hover {
             background: #475569;
+        }
+
+        /* Glassmorphism styling cards */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(226, 232, 240, 0.7);
+        }
+        .dark .glass-card {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(51, 65, 85, 0.4);
+        }
+
+        /* Critical path glowing effect */
+        .critical-glow {
+            box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);
+            border-color: rgba(239, 68, 68, 0.5) !important;
+        }
+
+        /* Skeleton loader shimmer */
+        .skeleton-shimmer {
+            background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite linear;
+        }
+        .dark .skeleton-shimmer {
+            background: linear-gradient(90deg, #1e293b 25%, #334155 50%, #1e293b 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite linear;
+        }
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+
+        /* Scale animation for modal & command palette */
+        @keyframes scaleIn {
+            from { transform: scale(0.96); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .animate-scale-in {
+            animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        /* Collapsible sidebar widths */
+        .sidebar-expanded {
+            width: 16rem; /* 64 */
+        }
+        .sidebar-collapsed {
+            width: 4rem; /* 16 */
+        }
+        .sidebar-transition {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
     </style>
 </head>
@@ -83,6 +147,17 @@
         };
 
         const API_BASE = window.location.origin;
+
+        // Date formatter helper (DD-MM-YYYY)
+        function formatDate(dateStr) {
+            if (!dateStr || dateStr === 'N/A' || dateStr === 'nil') return 'N/A';
+            const cleanStr = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+            const parts = cleanStr.split('-');
+            if (parts.length === 3) {
+                return `${parts[2]}-${parts[1]}-${parts[0]}`;
+            }
+            return dateStr;
+        }
 
         // API Client wrapper
         async function apiRequest(endpoint, method = 'GET', body = null) {
@@ -295,18 +370,12 @@
             } catch (err) {}
         }
 
-        async function changeActivityDuration(activityId, plannedStartDate, durationValue) {
+        async function changeActivityDurationMonths(activityId, durationMonthsValue) {
             try {
-                const durationVal = durationValue.trim().toLowerCase();
-                const months = (durationVal === 'nil' || durationVal === '') ? 0 : parseInt(durationVal) || 0;
-                
-                const startDate = new Date(plannedStartDate);
-                const endDate = new Date(startDate);
-                endDate.setDate(endDate.getDate() + months * 30);
-                const formattedEndDate = endDate.toISOString().split('T')[0];
-                
+                const months = parseFloat(durationMonthsValue) || 1.0;
                 await updateActivityDetails(activityId, {
-                    planned_end_date: formattedEndDate,
+                    duration_months: months,
+                    remaining_months: months,
                     change_reason: "Adjusted planned duration"
                 });
             } catch (err) {
@@ -465,11 +534,55 @@
             `;
         }
 
+        function toggleSidebar() {
+            store.sidebarCollapsed = !store.sidebarCollapsed;
+            localStorage.setItem('pmis_sidebar_collapsed', store.sidebarCollapsed);
+            render();
+        }
+
         function renderSidebar() {
             const isWizard = store.user.is_first_login;
             const current = store.currentView;
+            const collapsed = store.sidebarCollapsed || false;
+            
+            if (collapsed) {
+                return `
+                    <div class="hidden md:flex sidebar-collapsed md:flex-col bg-slate-950 text-slate-400 border-r border-slate-900 sidebar-transition relative">
+                        <div class="flex flex-col flex-1 min-h-0">
+                            <!-- Sidebar Header -->
+                            <div class="flex items-center justify-center h-16 flex-shrink-0 px-2 bg-slate-950 border-b border-slate-900">
+                                <span class="h-9 w-9 rounded-lg bg-sky-500/10 flex items-center justify-center border border-sky-500/20" title="Indian Navy PMIS">
+                                    <i class="fa-solid fa-anchor text-sky-400 text-base"></i>
+                                </span>
+                            </div>
+                            
+                            <!-- Navigation Links -->
+                            <div class="flex-1 flex flex-col overflow-y-auto py-6">
+                                <nav class="flex-1 px-2 space-y-1.5">
+                                    ${!isWizard ? `
+                                        <a href="#" onclick="navigate('dashboard')" class="group flex items-center justify-center p-2.5 rounded-xl transition-all duration-250 ${current === 'dashboard' ? 'bg-sky-500/10 text-sky-400' : 'hover:bg-slate-900/60 hover:text-white'}" title="Dashboard">
+                                            <i class="fa-solid fa-chart-line text-sm transition-transform group-hover:scale-110"></i>
+                                        </a>
+                                    ` : ''}
+                                    <a href="#" onclick="navigate('template-builder')" class="group flex items-center justify-center p-2.5 rounded-xl transition-all duration-250 ${current === 'template-builder' ? 'bg-sky-500/10 text-sky-400' : 'hover:bg-slate-900/60 hover:text-white'}" title="Template Builder">
+                                        <i class="fa-solid fa-diagram-project text-sm transition-transform group-hover:scale-110"></i>
+                                    </a>
+                                </nav>
+                            </div>
+                            
+                            <!-- User Profile Area -->
+                            <div class="flex-shrink-0 flex items-center justify-center bg-slate-950 p-3 border-t border-slate-900/80">
+                                <button onclick="logout()" class="text-slate-500 hover:text-rose-400 p-2 rounded-lg hover:bg-slate-900/60 transition-all duration-200" title="Log Out">
+                                    <i class="fa-solid fa-power-off text-sm"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
             return `
-                <div class="hidden md:flex md:w-64 md:flex-col bg-slate-950 text-slate-400 border-r border-slate-900 transition-all duration-300 relative">
+                <div class="hidden md:flex sidebar-expanded md:flex-col bg-slate-950 text-slate-400 border-r border-slate-900 sidebar-transition relative">
                     <div class="flex flex-col flex-1 min-h-0">
                         <!-- Sidebar Header -->
                         <div class="flex items-center h-16 flex-shrink-0 px-6 bg-slate-950 gap-3 border-b border-slate-900">
@@ -518,8 +631,14 @@
         }
 
         function renderHeader() {
+            const collapseBtn = `
+                <button onclick="toggleSidebar()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800/80 mr-3 transition-all duration-200" title="Toggle Sidebar">
+                    <i class="fa-solid ${store.sidebarCollapsed ? 'fa-indent' : 'fa-outdent'} text-xs"></i>
+                </button>
+            `;
+
             // Contextual Breadcrumbs
-            let breadcrumbs = `<span class="text-slate-400 dark:text-slate-500">Workspace</span>`;
+            let breadcrumbs = `<div class="flex items-center">${collapseBtn}<span class="text-slate-400 dark:text-slate-500">Workspace</span>`;
             if (store.currentView === 'dashboard') {
                 breadcrumbs += ` <i class="fa-solid fa-chevron-right text-[10px] text-slate-300 dark:text-slate-700 mx-2"></i> <span class="font-semibold text-slate-700 dark:text-slate-200">Executive Panel</span>`;
             } else if (store.currentView === 'template-builder') {
@@ -527,6 +646,7 @@
             } else if (store.currentView === 'project-view' && store.currentProject) {
                 breadcrumbs += ` <i class="fa-solid fa-chevron-right text-[10px] text-slate-300 dark:text-slate-700 mx-2"></i> <a href="#" onclick="navigate('dashboard')" class="hover:text-sky-500 transition-colors">Projects</a> <i class="fa-solid fa-chevron-right text-[10px] text-slate-300 dark:text-slate-700 mx-2"></i> <span class="font-semibold text-slate-700 dark:text-slate-200">${store.currentProject.project_name}</span>`;
             }
+            breadcrumbs += `</div>`;
 
             return `
                 <header class="h-16 bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-900 flex items-center justify-between px-6 flex-shrink-0 transition-colors duration-300">
@@ -540,7 +660,7 @@
                         <!-- Search Box (Visual Mockup) -->
                         <div class="hidden sm:flex items-center relative">
                             <i class="fa-solid fa-magnifying-glass absolute left-3 text-slate-400 text-xs"></i>
-                            <input type="text" placeholder="Global search... (Ctrl+K)" readonly onclick="showToast('Command palette coming soon!', 'info')" class="w-48 pl-9 pr-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-400 focus:outline-none cursor-pointer">
+                            <input type="text" placeholder="Search... (Ctrl+K)" readonly onclick="toggleCommandPalette()" class="w-48 pl-9 pr-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-400 focus:outline-none cursor-pointer hover:border-slate-350 transition-colors">
                         </div>
                         
                         <!-- Theme switch -->
@@ -740,9 +860,12 @@
                                                     <i class="fa-solid fa-flag text-[10px]"></i>
                                                     ${m.milestone_name}
                                                 </p>
-                                                <p class="text-[9px] font-semibold text-slate-400">Project: ${m.project_name}</p>
+                                                <div class="flex flex-wrap items-center gap-2 mt-0.5">
+                                                    <span class="text-[9px] font-semibold text-slate-400">Project: ${m.project_name}</span>
+                                                    <span class="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/10 flex items-center gap-0.5"><i class="fa-solid fa-triangle-exclamation text-[8px]"></i> Delay: ${m.delay_chance_pct}%</span>
+                                                </div>
                                             </div>
-                                            <span class="text-[9px] font-extrabold px-2.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-300/10 select-none whitespace-nowrap">${m.planned_end_date.split('T')[0]}</span>
+                                            <span class="text-[9px] font-extrabold px-2.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-300/10 select-none whitespace-nowrap">${formatDate(m.planned_end_date)}</span>
                                         </div>
                                     `).join('')}
                                 </div>
@@ -874,6 +997,59 @@
             };
             createNewProject(formData);
             closeCreateProjectModal();
+        }
+
+        function openEditActivityModal(activityId) {
+            const activity = store.currentActivities.find(a => a.id === activityId);
+            if (!activity) {
+                showToast("Activity not found in current project.", "error");
+                return;
+            }
+            const form = document.getElementById('editActivityForm');
+            form.activity_id.value = activity.id;
+            form.current_status.value = activity.current_status || 'NotStarted';
+            form.completion_percentage.value = activity.completion_percentage !== undefined ? activity.completion_percentage : 0;
+            form.actual_start_date.value = activity.actual_start_date || '';
+            form.actual_end_date.value = activity.actual_end_date || '';
+            form.duration_months.value = activity.duration_months !== undefined ? activity.duration_months : 1.0;
+            form.remaining_months.value = activity.remaining_months !== undefined ? activity.remaining_months : 1.0;
+            form.remarks.value = activity.remarks || '';
+            
+            document.getElementById('editActivityModalTitle').innerText = activity.name;
+            document.getElementById('editActivityModal').classList.remove('hidden');
+        }
+
+        function closeEditActivityModal() {
+            document.getElementById('editActivityModal').classList.add('hidden');
+        }
+
+        async function submitEditActivityForm(form) {
+            const activityId = parseInt(form.activity_id.value);
+            const actualStart = form.actual_start_date.value;
+            const actualEnd = form.actual_end_date.value;
+            const durationMonths = parseFloat(form.duration_months.value) || 1.0;
+            const remainingMonths = parseFloat(form.remaining_months.value) || 0.0;
+
+            if (actualStart && actualEnd) {
+                if (new Date(actualEnd) < new Date(actualStart)) {
+                    showToast("Actual end date cannot be earlier than actual start date.", "error");
+                    return;
+                }
+            }
+
+            const updates = {
+                current_status: form.current_status.value,
+                completion_percentage: parseFloat(form.completion_percentage.value) || 0,
+                actual_start_date: actualStart || null,
+                actual_end_date: actualEnd || null,
+                duration_months: durationMonths,
+                remaining_months: remainingMonths,
+                remarks: form.remarks.value || "",
+                change_reason: form.remarks.value || "Manual update"
+            };
+            
+            await updateActivityDetails(activityId, updates);
+            closeEditActivityModal();
         }        // View: Template Setup Wizard & Builder
         let wizardActivities = [];
         let wizardLoops = [];
@@ -1461,7 +1637,7 @@ feedback_loops: wizardLoops
                     <div class="bg-white dark:bg-slate-950 p-5 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm flex flex-col justify-between">
                         <div>
                             <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Est. Handover Date</p>
-                            <h4 class="text-lg font-black mt-2 text-slate-900 dark:text-white">${pred.expected_completion_date.split('T')[0]}</h4>
+                            <h4 class="text-lg font-black mt-2 text-slate-900 dark:text-white">${formatDate(pred.expected_completion_date)}</h4>
                         </div>
                         <p class="text-[10px] font-semibold text-slate-400 mt-2 flex items-center gap-1"><i class="fa-solid fa-calendar-check text-[9px]"></i> Based on ML Prediction</p>
                     </div>
@@ -1636,7 +1812,7 @@ feedback_loops: wizardLoops
                         <!-- Stat 1 -->
                         <div class="space-y-1">
                             <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Baseline Timeline</p>
-                            <p class="text-sm font-semibold">${p.start_date} to ${p.expected_end_date}</p>
+                            <p class="text-sm font-semibold">${formatDate(p.start_date)} to ${formatDate(p.expected_end_date)}</p>
                             <p class="text-xs text-slate-500">Calculated Project Span: <strong>${totalDurationMonths} months</strong></p>
                         </div>
                         
@@ -1699,6 +1875,7 @@ feedback_loops: wizardLoops
                                 <th class="px-5 py-3">Duration (Months)</th>
                                 <th class="px-5 py-3">Status</th>
                                 <th class="px-5 py-3">Progress</th>
+                                <th class="px-5 py-3">Remaining</th>
                                 <th class="px-5 py-3">Delay</th>
                                 <th class="px-5 py-3">Risk Tier</th>
                                 <th class="px-5 py-3 text-right">Action</th>
@@ -1720,10 +1897,14 @@ feedback_loops: wizardLoops
                                     Critical: 'text-purple-600 dark:text-purple-400'
                                 };
                                 
-                                // Calculate duration in months from dates
-                                const pStart = new Date(act.planned_start_date);
-                                const pEnd = new Date(act.planned_end_date);
-                                const durationMonths = Math.round((pEnd - pStart) / (1000 * 60 * 60 * 24 * 30));
+                                // Calculate remaining months
+                                const remMonthsVal = act.remaining_months !== undefined ? act.remaining_months : 1.0;
+                                let remainingText = '';
+                                if (act.current_status === 'Completed') {
+                                    remainingText = '<span class="text-emerald-500 font-semibold">0m (Done)</span>';
+                                } else {
+                                    remainingText = `<span class="font-bold text-slate-850 dark:text-slate-200">${remMonthsVal}m</span>`;
+                                }
 
                                 return `
                                     <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-900/20 transition-colors">
@@ -1736,14 +1917,14 @@ feedback_loops: wizardLoops
                                             <p class="text-[10px] text-slate-400 mt-0.5">Dept: ${act.assigned_department || 'General'} | Category: ${act.category}</p>
                                         </td>
                                         <td class="px-5 py-4 space-y-1">
-                                            <p class="text-[10px] text-slate-400">Planned: ${act.planned_start_date} to ${act.planned_end_date}</p>
+                                            <p class="text-[10px] text-slate-400">Planned: ${formatDate(act.planned_start_date)} to ${formatDate(act.planned_end_date)}</p>
                                             <p class="text-[10px] font-bold text-slate-800 dark:text-slate-200">
-                                                Actual: ${act.actual_start_date || 'N/A'} to ${act.actual_end_date || 'N/A'}
+                                                Actual: ${formatDate(act.actual_start_date)} to ${formatDate(act.actual_end_date)}
                                             </p>
                                         </td>
                                         <td class="px-5 py-4">
-                                            <input type="text" value="${durationMonths === 0 ? 'nil' : durationMonths}" 
-                                                onchange="changeActivityDuration(${act.id}, '${act.planned_start_date}', this.value)" 
+                                            <input type="number" step="0.1" min="0.1" value="${act.duration_months !== undefined ? act.duration_months : 1.0}" 
+                                                onchange="changeActivityDurationMonths(${act.id}, this.value)" 
                                                 class="w-16 px-2.5 py-1 text-xs text-center border border-slate-200 dark:border-slate-850 rounded bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white font-extrabold focus:outline-none focus:ring-2 focus:ring-sky-500/20">
                                         </td>
                                         <td class="px-5 py-4">
@@ -1756,6 +1937,9 @@ feedback_loops: wizardLoops
                                                 </div>
                                                 <span class="text-[10px] font-bold text-slate-500">${act.completion_percentage}%</span>
                                             </div>
+                                        </td>
+                                        <td class="px-5 py-4">
+                                            ${remainingText}
                                         </td>
                                         <td class="px-5 py-4 font-bold text-slate-900 dark:text-white">
                                             ${act.current_delay_days > 0 ? `<span class="text-rose-500 font-extrabold">+${act.current_delay_days}d</span>` : '-'}
@@ -1784,8 +1968,8 @@ feedback_loops: wizardLoops
                                 <input type="hidden" name="activity_id">
                                 <div class="px-6 py-5 border-b border-slate-100 dark:border-slate-900 flex items-center justify-between">
                                     <div class="space-y-0.5">
-                                        <h3 class="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">Update Activity Status</h3>
-                                        <p class="text-[10px] text-slate-455">Apply progress updates and remarks to the active database.</p>
+                                        <h3 class="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider" id="editActivityModalTitle">Update Activity Status</h3>
+                                        <p class="text-[10px] text-slate-400 dark:text-slate-500">Apply progress updates and remarks to the active database.</p>
                                     </div>
                                     <button type="button" onclick="closeEditActivityModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors">
                                         <i class="fa-solid fa-xmark"></i>
@@ -1795,7 +1979,7 @@ feedback_loops: wizardLoops
                                     <div class="grid grid-cols-2 gap-4">
                                         <div>
                                             <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Status</label>
-                                            <select name="current_status" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none cursor-pointer">
+                                            <select name="current_status" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all duration-200 cursor-pointer">
                                                 <option value="NotStarted">NotStarted</option>
                                                 <option value="InProgress">InProgress</option>
                                                 <option value="Completed">Completed</option>
@@ -1805,27 +1989,37 @@ feedback_loops: wizardLoops
                                         </div>
                                         <div>
                                             <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Completion %</label>
-                                            <input type="number" name="completion_percentage" min="0" max="100" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none">
+                                            <input type="number" name="completion_percentage" min="0" max="100" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all duration-200">
                                         </div>
                                     </div>
                                     <div class="grid grid-cols-2 gap-4">
                                         <div>
                                             <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Actual Start Date</label>
-                                            <input type="date" name="actual_start_date" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none">
+                                            <input type="date" name="actual_start_date" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all duration-200">
                                         </div>
                                         <div>
                                             <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Actual End Date</label>
-                                            <input type="date" name="actual_end_date" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none">
+                                            <input type="date" name="actual_end_date" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all duration-200">
+                                        </div>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Duration (Months)</label>
+                                            <input type="number" step="0.1" name="duration_months" min="0.1" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all duration-200">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Remaining Time (Months)</label>
+                                            <input type="number" step="0.1" name="remaining_months" min="0" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all duration-200">
                                         </div>
                                     </div>
                                     <div>
                                         <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Remarks / Change Reasons</label>
-                                        <textarea name="remarks" rows="2" placeholder="Describe delay causes, testing logs or scope additions..." class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none"></textarea>
+                                        <textarea name="remarks" rows="2" placeholder="Describe delay causes, testing logs or scope additions..." class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all duration-200"></textarea>
                                     </div>
                                 </div>
                                 <div class="px-6 py-4 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-900 flex justify-end gap-3 rounded-b-2xl">
-                                    <button type="button" onclick="closeEditActivityModal()" class="px-4 py-2 border border-slate-250 dark:border-slate-800 rounded-lg text-xs font-bold text-slate-650 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shadow-sm">Cancel</button>
-                                    <button type="submit" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm">Apply Changes</button>
+                                    <button type="button" onclick="closeEditActivityModal()" class="px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-bold text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all duration-200 shadow-sm">Cancel</button>
+                                    <button type="submit" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-bold transition-all duration-200 shadow-sm">Apply Changes</button>
                                 </div>
                             </form>
                         </div>
@@ -1866,12 +2060,19 @@ feedback_loops: wizardLoops
             maxTime += 7 * oneDay;
             
             const totalDuration = maxTime - minTime;
+            const totalDays = Math.ceil(totalDuration / oneDay);
             const timelineWidth = 600; // SVG timeline width
             const labelWidth = 220;    // Width for row labels
             
             const rowHeight = 36;
             const height = g.length * rowHeight + 45;
             const width = labelWidth + timelineWidth + 30;
+
+            // Initialize playback states
+            if (store.playbackDay === undefined) store.playbackDay = 0;
+            if (store.playbackActive === undefined) store.playbackActive = false;
+            
+            const playbackTime = minTime + store.playbackDay * oneDay;
             
             // Generate monthly grid markers
             let gridLines = '';
@@ -1896,15 +2097,27 @@ feedback_loops: wizardLoops
                 currentDate.setMonth(currentDate.getMonth() + 1);
             }
 
+            // Draw playback vertical line if active/started
+            if (store.playbackDay > 0) {
+                const playPct = (playbackTime - minTime) / totalDuration;
+                const playX = labelWidth + playPct * timelineWidth;
+                gridLines += `
+                    <line x1="${playX}" y1="30" x2="${playX}" y2="${height}" stroke="rgb(244, 63, 94)" stroke-width="2" stroke-dasharray="3 2" />
+                    <circle cx="${playX}" cy="30" r="4.5" fill="rgb(244, 63, 94)" />
+                `;
+            }
+
             let svgRows = '';
             g.forEach((act, idx) => {
                 const y = 35 + (idx * rowHeight);
                 let startX = labelWidth + 20;
                 let barWidth = 60;
+                let sTime = 0;
+                let eTime = 0;
                 
                 if (act.start_date && act.end_date) {
-                    const sTime = new Date(act.start_date).getTime();
-                    const eTime = new Date(act.end_date).getTime();
+                    sTime = new Date(act.start_date).getTime();
+                    eTime = new Date(act.end_date).getTime();
                     const leftPct = (sTime - minTime) / totalDuration;
                     const widthPct = (eTime - sTime) / totalDuration;
                     startX = labelWidth + leftPct * timelineWidth;
@@ -1913,7 +2126,30 @@ feedback_loops: wizardLoops
                 
                 const isCompleted = act.status === 'Completed';
                 const baseColor = act.is_critical ? '#ef4444' : (isCompleted ? '#10b981' : '#3b82f6');
-                const progressWidth = barWidth * act.progress;
+                
+                // Opacity logic based on playback slider time
+                let elementOpacity = "1.0";
+                let progressVal = act.progress;
+                
+                if (store.playbackDay > 0) {
+                    if (playbackTime < sTime) {
+                        // Future task not yet reached in playback
+                        elementOpacity = "0.15";
+                        progressVal = 0;
+                    } else if (playbackTime >= sTime && playbackTime < eTime) {
+                        // Active task in progress in playback
+                        elementOpacity = "0.85";
+                        const actDur = eTime - sTime;
+                        const elapsed = playbackTime - sTime;
+                        progressVal = elapsed / actDur;
+                    } else {
+                        // Completed task relative to playback
+                        elementOpacity = "1.0";
+                        progressVal = act.progress;
+                    }
+                }
+                
+                const progressWidth = barWidth * progressVal;
                 
                 // Draw zebra strip background for rows
                 gridLines += `<rect x="0" y="${y - 5}" width="${width}" height="${rowHeight}" fill="${idx % 2 === 0 ? 'rgba(241, 245, 249, 0.2)' : 'transparent'}" class="${idx % 2 === 0 ? 'dark:fill-slate-900/10' : ''}" />`;
@@ -1921,7 +2157,7 @@ feedback_loops: wizardLoops
                 // Task name labels
                 const criticalSymbol = act.is_critical ? `<tspan fill="#ef4444" font-weight="900">[!] </tspan>` : '';
                 svgRows += `
-                    <text x="10" y="${y + 16}" font-size="11" font-weight="700" fill="#475569" class="dark:fill-slate-350 select-none">
+                    <text x="10" y="${y + 16}" font-size="11" font-weight="700" fill="#475569" class="dark:fill-slate-350 select-none" opacity="${elementOpacity}">
                         ${criticalSymbol}${act.text.length > 25 ? act.text.substring(0, 23) + '..' : act.text}
                     </text>
                 `;
@@ -1934,27 +2170,31 @@ feedback_loops: wizardLoops
                     const points = `${diamondX},${diamondY - size} ${diamondX + size},${diamondY} ${diamondX},${diamondY + size} ${diamondX - size},${diamondY}`;
                     
                     svgRows += `
-                        <polygon points="${points}" fill="${baseColor}" class="cursor-pointer transition-all hover:scale-110" onclick="openEditActivityModal(${act.id})" />
-                        <text x="${diamondX + 16}" y="${y + 12}" font-size="9" font-weight="800" fill="#94a3b8" class="uppercase select-none">Milestone</text>
+                        <polygon points="${points}" fill="${baseColor}" class="cursor-pointer transition-all hover:scale-110" opacity="${elementOpacity}" onclick="openEditActivityModal(${act.id})" />
+                        <text x="${diamondX + 16}" y="${y + 12}" font-size="9" font-weight="800" fill="#94a3b8" class="uppercase select-none" opacity="${elementOpacity}">Milestone</text>
                     `;
                 } else {
                     // Task bar background
                     svgRows += `
-                        <rect x="${startX}" y="${y + 2}" width="${barWidth}" height="14" rx="4" fill="${baseColor}" opacity="0.2" class="cursor-pointer" onclick="openEditActivityModal(${act.id})" />
+                        <rect x="${startX}" y="${y + 2}" width="${barWidth}" height="14" rx="4" fill="${baseColor}" opacity="${parseFloat(elementOpacity) * 0.2}" class="cursor-pointer" onclick="openEditActivityModal(${act.id})" />
                     `;
                     // Task bar progress inner
                     if (progressWidth > 0) {
                         svgRows += `
-                            <rect x="${startX}" y="${y + 2}" width="${progressWidth}" height="14" rx="4" fill="${baseColor}" class="cursor-pointer" onclick="openEditActivityModal(${act.id})" />
+                            <rect x="${startX}" y="${y + 2}" width="${progressWidth}" height="14" rx="4" fill="${baseColor}" opacity="${elementOpacity}" class="cursor-pointer" onclick="openEditActivityModal(${act.id})" />
                         `;
                     }
                     // Add text inside bar if width allows, or after bar
-                    const showText = `${Math.round(act.progress * 100)}%`;
+                    const showText = `${Math.round(progressVal * 100)}%`;
                     svgRows += `
-                        <text x="${startX + barWidth + 8}" y="${y + 12}" font-size="9" font-weight="bold" fill="#64748b" class="dark:fill-slate-400 select-none">${showText} (${act.assignee})</text>
+                        <text x="${startX + barWidth + 8}" y="${y + 12}" font-size="9" font-weight="bold" fill="#64748b" class="dark:fill-slate-400 select-none" opacity="${elementOpacity}">${showText} (${act.assignee})</text>
                     `;
                 }
             });
+
+            // Convert playbackTime to a readable date
+            const playbackDateObj = new Date(playbackTime);
+            const formattedPlaybackDate = `${playbackDateObj.getDate()} ${monthNames[playbackDateObj.getMonth()]} '${String(playbackDateObj.getFullYear()).slice(-2)}`;
 
             return `
                 <div class="bg-white dark:bg-slate-950 p-6 rounded-2xl border border-slate-200 dark:border-slate-900 shadow-sm flex flex-col animate-slide-up">
@@ -1969,6 +2209,26 @@ feedback_loops: wizardLoops
                             <div class="flex items-center gap-1.5"><span class="h-3 w-5 bg-blue-500 rounded border border-blue-600 block"></span> On Track</div>
                         </div>
                     </div>
+
+                    <!-- Visual Timeline Playback Bar -->
+                    <div class="mb-5 flex flex-col sm:flex-row items-center gap-4 bg-slate-50 dark:bg-slate-900/50 border border-slate-200/50 dark:border-slate-800 rounded-2xl p-4 text-xs font-bold shadow-sm transition-all duration-300">
+                        <div class="flex items-center gap-2">
+                            <button onclick="toggleGanttPlayback()" class="h-9 w-9 bg-sky-650 hover:bg-sky-600 text-white rounded-xl flex items-center justify-center transition-all shadow-sm transform hover:-translate-y-0.5" title="${store.playbackActive ? 'Pause Playback' : 'Play Timeline Playback'}">
+                                <i class="fa-solid ${store.playbackActive ? 'fa-pause' : 'fa-play'} text-xs"></i>
+                            </button>
+                            <button onclick="resetGanttPlayback()" class="h-9 w-9 border border-slate-250 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl flex items-center justify-center transition-all shadow-sm" title="Reset Timeline">
+                                <i class="fa-solid fa-rotate-left text-xs"></i>
+                            </button>
+                        </div>
+                        <div class="flex-1 w-full flex items-center gap-4">
+                            <span class="text-slate-500 dark:text-slate-400 whitespace-nowrap min-w-[90px] text-right font-extrabold uppercase tracking-wider text-[10px]" id="playbackDayLabel">
+                                ${store.playbackDay === 0 ? 'Not Started' : `${formattedPlaybackDate}`}
+                            </span>
+                            <input type="range" min="0" max="${totalDays}" value="${store.playbackDay}" oninput="setGanttPlaybackDay(parseInt(this.value))" class="w-full accent-sky-500 h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg cursor-pointer transition-all" />
+                            <span class="text-slate-400 text-[9px] uppercase font-bold whitespace-nowrap">Day ${store.playbackDay} / ${totalDays}</span>
+                        </div>
+                    </div>
+
                     <div class="overflow-x-auto border border-slate-200 dark:border-slate-900 rounded-xl p-3 bg-slate-50 dark:bg-slate-900/25">
                         <svg width="${width}" height="${height}" class="min-w-full">
                             <!-- Draw Grid Background -->
@@ -2336,7 +2596,7 @@ feedback_loops: wizardLoops
                                             </tr>
                                         ` : store.predictionHistory.map(ph => `
                                             <tr>
-                                                <td class="px-4 py-3 font-semibold">${ph.predicted_at.split('T')[0]}</td>
+                                                <td class="px-4 py-3 font-semibold">${formatDate(ph.predicted_at)}</td>
                                                 <td class="px-4 py-3">${ph.project_progress_pct}%</td>
                                                 <td class="px-4 py-3 font-bold">${ph.delay_percentage}%</td>
                                                 <td class="px-4 py-3">${ph.delay_months}m</td>
@@ -2376,8 +2636,156 @@ feedback_loops: wizardLoops
             `;
         }
 
+        let commandPaletteOpen = false;
+
+        function toggleCommandPalette() {
+            commandPaletteOpen = !commandPaletteOpen;
+            const palette = document.getElementById('commandPalette');
+            if (!palette) {
+                const div = document.createElement('div');
+                div.id = 'commandPalette';
+                div.className = 'fixed inset-0 z-50 overflow-y-auto hidden';
+                div.innerHTML = `
+                    <div class="flex items-start justify-center min-h-screen pt-20 px-4">
+                        <div class="fixed inset-0 bg-slate-950/70 dark:bg-slate-950/90 backdrop-blur-sm transition-opacity" onclick="toggleCommandPalette()"></div>
+                        <div class="inline-block bg-white dark:bg-slate-900 w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden transform transition-all relative z-10 animate-scale-in">
+                            <div class="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center gap-3">
+                                <i class="fa-solid fa-magnifying-glass text-slate-400"></i>
+                                <input type="text" id="commandInput" placeholder="Type a command or search projects..." oninput="filterCommands(this.value)" class="w-full bg-transparent border-0 text-sm font-semibold focus:outline-none text-slate-900 dark:text-white" />
+                                <span class="text-[10px] bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded font-bold text-slate-450">ESC</span>
+                            </div>
+                            <div class="p-2 max-h-80 overflow-y-auto" id="commandList"></div>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(div);
+            }
+            
+            const paletteEl = document.getElementById('commandPalette');
+            if (commandPaletteOpen) {
+                paletteEl.classList.remove('hidden');
+                document.getElementById('commandInput').value = '';
+                filterCommands('');
+                setTimeout(() => document.getElementById('commandInput').focus(), 50);
+            } else {
+                paletteEl.classList.add('hidden');
+            }
+        }
+
+        function filterCommands(query) {
+            const list = document.getElementById('commandList');
+            if (!list) return;
+            list.innerHTML = '';
+            
+            const baseCommands = [
+                { name: 'Go to Dashboard', icon: 'fa-chart-line', action: () => { navigate('dashboard'); toggleCommandPalette(); } },
+                { name: 'Go to Template Builder', icon: 'fa-diagram-project', action: () => { navigate('template-builder'); toggleCommandPalette(); } },
+                { name: 'Toggle Light/Dark Theme', icon: 'fa-circle-half-stroke', action: () => { toggleTheme(); toggleCommandPalette(); } }
+            ];
+            
+            const projectCommands = (store.projects || []).map(p => ({
+                name: `Open Project: ${p.project_name}`,
+                icon: 'fa-ship',
+                action: () => { navigate('project-view', p.id); toggleCommandPalette(); }
+            }));
+            
+            const all = [...baseCommands, ...projectCommands];
+            const filtered = all.filter(c => c.name.toLowerCase().includes(query.toLowerCase()));
+            
+            if (filtered.length === 0) {
+                list.innerHTML = `<div class="p-4 text-center text-xs text-slate-400">No commands or projects found.</div>`;
+                return;
+            }
+            
+            filtered.forEach(c => {
+                const item = document.createElement('div');
+                item.className = 'flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/80 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-200 transition-colors';
+                item.innerHTML = `
+                    <i class="fa-solid ${c.icon} text-slate-400 text-sm w-4"></i>
+                    <span>${c.name}</span>
+                `;
+                item.onclick = c.action;
+                list.appendChild(item);
+            });
+        }
+
+        // Key listeners for Ctrl+K and ESC
+        document.addEventListener('keydown', e => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+                e.preventDefault();
+                toggleCommandPalette();
+            }
+            if (e.key === 'Escape' && commandPaletteOpen) {
+                toggleCommandPalette();
+            }
+        });
+
+        // Gantt Playback animation helper logic
+        function toggleGanttPlayback() {
+            if (store.playbackActive) {
+                clearInterval(store.playbackInterval);
+                store.playbackActive = false;
+            } else {
+                store.playbackActive = true;
+                
+                const g = store.ganttData.activities;
+                let minTime = Infinity;
+                let maxTime = -Infinity;
+                g.forEach(act => {
+                    if (act.start_date) {
+                        const t = new Date(act.start_date).getTime();
+                        if (t < minTime) minTime = t;
+                    }
+                    if (act.end_date) {
+                        const t = new Date(act.end_date).getTime();
+                        if (t > maxTime) maxTime = t;
+                    }
+                });
+                const oneDay = 24 * 60 * 60 * 1000;
+                if (minTime === Infinity) minTime = new Date().getTime() - 7 * oneDay;
+                if (maxTime === -Infinity) maxTime = new Date().getTime() + 360 * oneDay + 7 * oneDay;
+                
+                minTime -= 7 * oneDay;
+                maxTime += 7 * oneDay;
+                const totalDuration = maxTime - minTime;
+                const totalDays = Math.ceil(totalDuration / oneDay);
+                
+                if (store.playbackDay >= totalDays) {
+                    store.playbackDay = 0;
+                }
+                
+                store.playbackInterval = setInterval(() => {
+                    store.playbackDay += 2;
+                    if (store.playbackDay >= totalDays) {
+                        store.playbackDay = totalDays;
+                        clearInterval(store.playbackInterval);
+                        store.playbackActive = false;
+                    }
+                    render();
+                }, 80);
+            }
+            render();
+        }
+
+        function resetGanttPlayback() {
+            if (store.playbackInterval) {
+                clearInterval(store.playbackInterval);
+            }
+            store.playbackActive = false;
+            store.playbackDay = 0;
+            render();
+        }
+
+        function setGanttPlaybackDay(day) {
+            store.playbackDay = day;
+            render();
+        }
+
         // Initialize application
         function initApp() {
+            // Read initial sidebar state
+            store.sidebarCollapsed = localStorage.getItem('pmis_sidebar_collapsed') === 'true';
+            
             if (store.token) {
                 if (store.user.role === 'Admin' && store.user.is_first_login) {
                     navigate('template-builder');
