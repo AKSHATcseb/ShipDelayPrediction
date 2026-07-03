@@ -17,12 +17,12 @@ from backend.services.template_service import (
     duplicate_template, archive_template, add_activity_to_template,
     update_activity_template, delete_activity_template, update_full_template
 )
-from backend.api.auth import get_current_user, require_admin
+from backend.api.auth import get_current_user, require_admin, require_admin_or_pm
 
 router = APIRouter(prefix="/api/templates", tags=["Project Templates"])
 
 @router.get("", response_model=List[TemplateResponse])
-def get_templates(include_archived: bool = False, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def get_templates(include_archived: bool = False, db: Session = Depends(get_db), current_user = Depends(require_admin_or_pm)):
     """List all templates."""
     templates = list_templates(db, include_archived=include_archived)
     # Convert to response schema, adding activity counts
@@ -41,7 +41,7 @@ def get_templates(include_archived: bool = False, db: Session = Depends(get_db),
     return res
 
 @router.post("", response_model=TemplateDetailResponse, status_code=status.HTTP_201_CREATED)
-def post_template(request: TemplateCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def post_template(request: TemplateCreate, db: Session = Depends(get_db), current_user = Depends(require_admin)):
     """Create a new template with activities."""
     try:
         activities_data = [act.model_dump() for act in request.activities]
@@ -51,7 +51,7 @@ def post_template(request: TemplateCreate, db: Session = Depends(get_db), curren
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/{id}", response_model=TemplateDetailResponse)
-def get_template_by_id(id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def get_template_by_id(id: int, db: Session = Depends(get_db), current_user = Depends(require_admin_or_pm)):
     """Get detailed template info including all activity steps."""
     template = get_template(db, id)
     if not template:
@@ -59,7 +59,7 @@ def get_template_by_id(id: int, db: Session = Depends(get_db), current_user = De
     return template
 
 @router.put("/{id}", response_model=TemplateResponse)
-def put_template(id: int, request: TemplateUpdate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def put_template(id: int, request: TemplateUpdate, db: Session = Depends(get_db), current_user = Depends(require_admin)):
     """Update template metadata."""
     template = update_template(db, id, request.name, request.description)
     if not template:
@@ -75,7 +75,7 @@ def put_template(id: int, request: TemplateUpdate, db: Session = Depends(get_db)
     )
 
 @router.put("/{id}/full", response_model=TemplateDetailResponse)
-def put_full_template(id: int, request: TemplateCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def put_full_template(id: int, request: TemplateCreate, db: Session = Depends(get_db), current_user = Depends(require_admin)):
     """Replace all activities, loops and details of an existing template."""
     try:
         activities_data = [act.model_dump() for act in request.activities]
@@ -87,7 +87,7 @@ def put_full_template(id: int, request: TemplateCreate, db: Session = Depends(ge
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/{id}/duplicate", response_model=TemplateDetailResponse)
-def post_duplicate_template(id: int, new_name: str, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def post_duplicate_template(id: int, new_name: str, db: Session = Depends(get_db), current_user = Depends(require_admin)):
     """Duplicate an existing template under a new name."""
     template = duplicate_template(db, id, new_name)
     if not template:
@@ -103,7 +103,7 @@ def delete_template(id: int, db: Session = Depends(get_db), current_user = Depen
     return {"message": "Template archived successfully"}
 
 @router.post("/{id}/activities", response_model=ActivityTemplateResponse)
-def post_activity(id: int, request: ActivityTemplateCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def post_activity(id: int, request: ActivityTemplateCreate, db: Session = Depends(get_db), current_user = Depends(require_admin)):
     """Add a new activity step to a template."""
     try:
         activity = add_activity_to_template(db, id, request.model_dump())
@@ -114,7 +114,7 @@ def post_activity(id: int, request: ActivityTemplateCreate, db: Session = Depend
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.put("/{id}/activities/{act_id}", response_model=ActivityTemplateResponse)
-def put_activity(id: int, act_id: int, request: ActivityTemplateUpdate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def put_activity(id: int, act_id: int, request: ActivityTemplateUpdate, db: Session = Depends(get_db), current_user = Depends(require_admin)):
     """Edit details of a specific activity template."""
     activity = update_activity_template(db, act_id, request.model_dump(exclude_unset=True))
     if not activity:

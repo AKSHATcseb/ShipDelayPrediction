@@ -1,0 +1,175 @@
+import fs from 'fs';
+import path from 'path';
+import mongoose from 'mongoose';
+import connectDB from './config/db.js';
+import User from './models/User.js';
+import Project from './models/Project.js';
+import ProjectMember from './models/ProjectMember.js';
+import Activity from './models/Activity.js';
+import { propagateDelays } from './services/cpmService.js';
+import { runMLPrediction } from './services/predictionClient.js';
+
+const formatPriority = (prio) => {
+  if (!prio) return 'Medium';
+  const val = prio.toLowerCase();
+  return val.charAt(0).toUpperCase() + val.slice(1);
+};
+
+const formatStatus = (stat) => {
+  if (!stat) return 'Active';
+  const val = stat.toLowerCase();
+  return val.charAt(0).toUpperCase() + val.slice(1);
+};
+
+const formatActivityStatus = (status) => {
+  if (!status) return 'NotStarted';
+  if (status.includes('_')) {
+    return status.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('');
+  }
+  if (status === 'IN_PROGRESS') return 'InProgress';
+  if (status === 'COMPLETED') return 'Completed';
+  if (status === 'DELAYED') return 'Delayed';
+  if (status === 'BLOCKED') return 'Blocked';
+  if (status === 'CANCELLED') return 'Cancelled';
+  if (status === 'NOT_STARTED') return 'NotStarted';
+  return status;
+};
+
+const migrate = async () => {
+  try {
+    // Connect to MongoDB
+    await connectDB();
+
+    const dumpPath = path.resolve('sqlite_dump.json');
+    if (!fs.existsSync(dumpPath)) {
+      console.error(`Dump file not found at: {dumpPath}`);
+      process.exit(1);
+    }
+
+    const data = JSON.parse(fs.readFileSync(dumpPath, 'utf8'));
+    console.log(`Loaded SQLite dump data: ${data.projects.length} projects, ${data.activities.length} activities.`);
+
+    // Check default users
+    let ownerUser = await User.findOne({ email: 'admin@navalpmis.gov' });
+    let pmUser = await User.findOne({ email: 'pm@navalpmis.gov' });
+    let engineerUser = await User.findOne({ email: 'engineer@navalpmis.gov' });
+    let viewerUser = await User.findOne({ email: 'viewer@navalpmis.gov' });
+
+    if (!ownerUser) {
+      console.log('Seeding user accounts first...');
+      ownerUser = await User.create({ name: 'Akshat (Project Manager)', email: 'admin@navalpmis.gov', password: 'password123', globalRole: 'PROJECT_MANAGER', role: 'PROJECT_MANAGER' });
+      pmUser = await User.create({ name: 'Brijesh (Project Manager)', email: 'pm@navalpmis.gov', password: 'password123', globalRole: 'PROJECT_MANAGER', role: 'PROJECT_MANAGER' });
+      engineerUser = await User.create({ name: 'Vishank (Viewer)', email: 'engineer@navalpmis.gov', password: 'password123', globalRole: 'VIEWER', role: 'VIEWER' });
+      viewerUser = await User.create({ name: 'Mradul (Viewer)', email: 'viewer@navalpmis.gov', password: 'password123', globalRole: 'VIEWER', role: 'VIEWER' });
+    }
+
+    // Clear existing workspaces, memberships and activities
+    await Project.deleteMany({});
+    await ProjectMember.deleteMany({});
+    await Activity.deleteMany({});
+    console.log('Cleared existing projects, memberships, and activities from MongoDB.');
+
+    // Map of SQLite Project ID -> MongoDB Project ID
+    const projectMapping = {};
+
+    for (let p of data.projects) {
+      const proj = await Project.create({
+        projectName: p.project_name,
+        projectIdCode: p.project_id_code,
+        shipName: p.ship_name || '',
+        shipClass: p.ship_class || '',
+        shipType: p.ship_type || 'Submarine',
+        projectCost: p.project_cost || 5000.0,
+        customer: p.customer || 'Indian Navy',
+        startDate: new Date(p.start_date),
+        expectedEndDate: new Date(p.expected_end_date),
+        priority: formatPriority(p.priority),
+        currentStatus: formatStatus(p.current_status),
+        overallProgress: p.overall_progress_pct || 0.0
+      });
+
+      projectMapping[p.id] = proj._id;
+      console.log(`Migrated Project: ${proj.projectName} (Code: ${proj.projectIdCode})`);
+
+      // Add default memberships
+      await ProjectMember.create([
+        { projectId: proj._id, userId: ownerUser._id, role: 'PROJECT_MANAGER', status: 'Active' },
+        { projectId: proj._id, userId: pmUser._id, role: 'PROJECT_MANAGER', status: 'Active' },
+        { projectId: proj._id, userId: engineerUser._id, role: 'VIEWER', status: 'Active' },
+        { projectId: proj._id, userId: viewerUser._id, role: 'VIEWER', status: 'Active' }
+      ]);
+    }
+
+    // Map of SQLite Activity ID -> MongoDB Activity document
+    const activityMapping = {};
+    const activitiesToMigrate = data.activities;
+
+    // First Pass: Create activities without dependencies
+    for (let act of activitiesToMigrate) {
+      const mongoProjectId = projectMapping[act.project_id];
+      if (!mongoProjectId) continue;
+
+      const newAct = await Activity.create({
+        projectId: mongoProjectId,
+        name: act.name,
+        category: act.category || 'Other',
+        sequenceNumber: act.sequence_number,
+        parallelGroup: act.parallel_group || null,
+        plannedStartDate: act.planned_start_date ? new Date(act.planned_start_date) : null,
+        plannedEndDate: act.planned_end_date ? new Date(act.planned_end_date) : null,
+        actualStartDate: act.actual_start_date ? new Date(act.actual_start_date) : null,
+        actualEndDate: act.actual_end_date ? new Date(act.actual_end_date) : null,
+        currentStatus: formatActivityStatus(act.current_status),
+        completionPercentage: act.completion_percentage || 0,
+        durationMonths: act.duration_months || 1.0,
+        remainingMonths: act.remaining_months || 1.0,
+        currentDelayDays: act.current_delay_days || 0,
+        historicalRiskWeight: act.historical_risk_weight || 50.0,
+        isMilestone: act.is_milestone === 1 || act.is_milestone === true,
+        isCriticalPath: act.is_critical_path === 1 || act.is_critical_path === true,
+        assignedDepartment: act.assigned_department || '',
+        assignedOfficer: act.assigned_officer || '',
+        remarks: act.remarks || ''
+      });
+
+      activityMapping[act.id] = newAct;
+    }
+
+    // Second Pass: Resolve dependency references
+    console.log('Resolving activity dependencies...');
+    for (let act of activitiesToMigrate) {
+      const mongoAct = activityMapping[act.id];
+      if (!mongoAct) continue;
+
+      const sqliteDeps = act.dependency_list || [];
+      const resolvedDeps = [];
+
+      sqliteDeps.forEach((sqliteDepId) => {
+        const depAct = activityMapping[sqliteDepId];
+        if (depAct) {
+          resolvedDeps.push(depAct._id);
+        }
+      });
+
+      if (resolvedDeps.length > 0) {
+        mongoAct.dependencyList = resolvedDeps;
+        await mongoAct.save();
+      }
+    }
+
+    // Third Pass: Propagate timelines & predict delay for each migrated project
+    console.log('Recalculating Critical Path Method & ML predictions...');
+    for (let projId of Object.values(projectMapping)) {
+      await propagateDelays(projId);
+      await runMLPrediction(projId);
+    }
+
+    console.log('Data migration complete! MongoDB matches SQLite states perfectly.');
+    process.exit(0);
+  } catch (error) {
+    console.error('Migration error:', error);
+    process.exit(1);
+  }
+};
+
+migrate();

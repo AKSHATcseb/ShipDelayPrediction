@@ -12,7 +12,7 @@ from backend.schemas.schemas import ProjectResponse, ProjectCreate, ProjectUpdat
 from backend.services.project_service import (
     create_project, list_projects, get_project, update_project, delete_project, get_project_stats
 )
-from backend.api.auth import get_current_user, require_admin
+from backend.api.auth import get_current_user, require_admin, require_pm, require_pm_or_viewer
 
 router = APIRouter(prefix="/api/projects", tags=["Projects"])
 
@@ -22,7 +22,7 @@ def get_projects(
     priority: Optional[str] = None,
     ship_type: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user = Depends(require_pm_or_viewer)
 ):
     """List all projects with optional filtering."""
     projects = list_projects(db, status=status, priority=priority, ship_type=ship_type)
@@ -55,7 +55,7 @@ def get_projects(
     return res
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
-def post_project(request: ProjectCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def post_project(request: ProjectCreate, db: Session = Depends(get_db), current_user = Depends(require_pm)):
     """Create a new project from a template. Auto-generates and schedules activities."""
     try:
         project = create_project(db, request.model_dump(), manager_id=current_user.id)
@@ -87,7 +87,7 @@ def post_project(request: ProjectCreate, db: Session = Depends(get_db), current_
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/{id}", response_model=ProjectResponse)
-def get_project_by_id(id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def get_project_by_id(id: int, db: Session = Depends(get_db), current_user = Depends(require_pm_or_viewer)):
     """Get project info by ID."""
     project = get_project(db, id)
     if not project:
@@ -118,7 +118,7 @@ def get_project_by_id(id: int, db: Session = Depends(get_db), current_user = Dep
     )
 
 @router.put("/{id}", response_model=ProjectResponse)
-def put_project(id: int, request: ProjectUpdate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def put_project(id: int, request: ProjectUpdate, db: Session = Depends(get_db), current_user = Depends(require_pm)):
     """Update project metadata."""
     project = update_project(db, id, request.model_dump(exclude_unset=True))
     if not project:
@@ -149,7 +149,7 @@ def put_project(id: int, request: ProjectUpdate, db: Session = Depends(get_db), 
     )
 
 @router.delete("/{id}", status_code=status.HTTP_200_OK)
-def cancel_project(id: int, db: Session = Depends(get_db), current_user = Depends(require_admin)):
+def cancel_project(id: int, db: Session = Depends(get_db), current_user = Depends(require_pm)):
     """Mark a project as CANCELLED (Admin only)."""
     success = delete_project(db, id)
     if not success:

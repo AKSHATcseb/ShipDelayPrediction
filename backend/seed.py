@@ -31,11 +31,39 @@ def seed_database(db: Session):
             is_first_login=True
         )
         db.add(admin_user)
-        db.commit()
-        db.refresh(admin_user)
-        logger.info("Admin user created successfully (username: 'admin', password: 'admin')")
-    else:
-        logger.info("Admin user already exists.")
+        logger.info("Admin user seeded (username: 'admin', password: 'admin')")
+    
+    # Seed default PM user pm/admin
+    pm_user = db.query(User).filter(User.username == "pm").first()
+    if not pm_user:
+        pm_user = User(
+            username="pm",
+            hashed_password=hash_password("admin"),
+            email="pm@navy.gov.in",
+            full_name="Naval Project Manager",
+            role=UserRole.PROJECT_MANAGER,
+            is_active=True,
+            is_first_login=True
+        )
+        db.add(pm_user)
+        logger.info("PM user seeded (username: 'pm', password: 'admin')")
+
+    # Seed default Viewer user viewer/admin
+    viewer_user = db.query(User).filter(User.username == "viewer").first()
+    if not viewer_user:
+        viewer_user = User(
+            username="viewer",
+            hashed_password=hash_password("admin"),
+            email="viewer@navy.gov.in",
+            full_name="Naval Project Observer",
+            role=UserRole.VIEWER,
+            is_active=True,
+            is_first_login=True
+        )
+        db.add(viewer_user)
+        logger.info("Viewer user seeded (username: 'viewer', password: 'admin')")
+        
+    db.commit()
 
     # 2. Seed default project templates
     for name, activities in DEFAULT_TEMPLATES.items():

@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Indian Navy Ship Acquisition PMIS</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <!-- Tailwind CSS (Offline) -->
     <script src="assets/tailwind.min.js"></script>
     <script>
@@ -11,6 +15,9 @@
             darkMode: 'class',
             theme: {
                 extend: {
+                    fontFamily: {
+                        sans: ['Outfit', 'sans-serif'],
+                    },
                     colors: {
                         navy: {
                             50: '#f0f7ff',
@@ -34,9 +41,10 @@
     <link rel="stylesheet" href="assets/fontawesome/css/all.min.css">
     <!-- Custom Stylesheet (Offline) -->
     <link rel="stylesheet" href="assets/custom.css">
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
         body {
-            font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-family: 'Outfit', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             text-rendering: optimizeLegibility;
             -webkit-font-smoothing: antialiased;
         }
@@ -146,6 +154,793 @@
             predictionHistory: []
         };
 
+        const emailMap = {
+            'admin': 'admin@navalpmis.gov',
+            'pm': 'pm@navalpmis.gov',
+            'engineer': 'engineer@navalpmis.gov',
+            'viewer': 'viewer@navalpmis.gov'
+        };
+
+        const collab = {
+            socket: null,
+            project: null,
+            projectId: null,
+            activities: [],
+            activeLocks: new Map(), // activityId -> { userId, userName }
+            onlineUsers: [],
+            notifications: [],
+
+            async init() {
+                if (!store.user) return;
+                const token = await this.getToken();
+                if (!token) return;
+
+                // 1. Connect Socket.IO
+                this.socket = io('http://localhost:5000', {
+                    auth: { token }
+                });
+
+                this.socket.on('connect', () => {
+                    console.log('Collaboration socket connected:', this.socket.id);
+                    if (store.currentProjectId) {
+                        this.syncProjectContext(store.currentProject.project_id_code);
+                    }
+                });
+
+                this.socket.on('presence-list-updated', (users) => {
+                    this.onlineUsers = users;
+                    this.renderPresence();
+                });
+
+                this.socket.on('activity-locked', ({ activityId, userId, userName }) => {
+                    this.activeLocks.set(activityId.toString(), { userId, userName });
+                    this.renderLocks();
+                });
+
+                this.socket.on('activity-unlocked', ({ activityId }) => {
+                    this.activeLocks.delete(activityId.toString());
+                    this.renderLocks();
+                });
+
+                this.socket.on('activity-updated', ({ activity, project, auditLogs }) => {
+                    // Receive real-time CPM update from other users
+                    if (store.currentProject && store.currentProject.project_id_code === project.projectIdCode) {
+                        // Refresh SQLite local store from Python backend
+                        loadProjectWorkspace(store.currentProjectId);
+                    }
+                });
+
+                this.socket.on('comment-added', (comment) => {
+                    if (this.project && comment.projectId === this.project._id && store.activeTab === 'comments') {
+                        this.fetchComments();
+                    }
+                });
+
+                this.socket.on('document-added', (doc) => {
+                    if (this.project && doc.projectId === this.project._id && store.activeTab === 'documents') {
+                        this.fetchDocuments();
+                    }
+                });
+
+                this.socket.on('notification-received', (notif) => {
+                    this.notifications.unshift(notif);
+                    this.renderNotificationsDropdown();
+                    showToast(notif.content, "info");
+                });
+
+                // Fetch initial notifications
+                this.fetchNotifications();
+            },
+
+            async getToken() {
+                let tok = localStorage.getItem('collab_token');
+                if (tok) return tok;
+                try {
+                    const username = store.user.username.toLowerCase();
+                    const email = emailMap[username] || `${username}@navalpmis.gov`;
+                    const res = await fetch('http://localhost:5000/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email, password: 'password123' })
+                    });
+                    const data = await res.json();
+                    if (data.token) {
+                        localStorage.setItem('collab_token', data.token);
+                        localStorage.setItem('collab_user', JSON.stringify(data.user));
+                        return data.token;
+                    }
+                } catch(e) {
+                    console.error("Collab login error:", e);
+                }
+                return null;
+            },
+
+            async syncProjectContext(projectCode) {
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    const res = await fetch('http://localhost:5000/api/auth/projects', {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const projects = await res.json();
+                    const matchedProj = projects.find(p => p.projectIdCode === projectCode);
+                    if (matchedProj) {
+                        this.project = matchedProj;
+                        this.projectId = matchedProj._id;
+                        
+                        // Join socket room
+                        if (this.socket) {
+                            this.socket.emit('join-project', { projectId: this.projectId });
+                        }
+
+                        // Fetch collab activities to map __v
+                        const actRes = await fetch(`http://localhost:5000/api/activities/project/${this.projectId}`, {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+                        this.activities = await actRes.json();
+                        
+                        this.renderPresence();
+                    }
+                } catch (e) {
+                    console.error("Error syncing project context:", e);
+                }
+            },
+
+            async fetchNotifications() {
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    const res = await fetch('http://localhost:5000/api/notifications', {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    this.notifications = await res.json();
+                    this.renderNotificationsDropdown();
+                } catch (e) {}
+            },
+
+            renderNotificationsDropdown() {
+                const badge = document.getElementById('collab-notif-badge');
+                const list = document.getElementById('collab-notif-list');
+                if (!badge || !list) return;
+
+                const unread = this.notifications.filter(n => !n.isRead);
+                if (unread.length > 0) {
+                    badge.classList.remove('hidden');
+                } else {
+                    badge.classList.add('hidden');
+                }
+
+                if (this.notifications.length === 0) {
+                    list.innerHTML = `<div class="p-4 text-center text-slate-400">No notifications.</div>`;
+                    return;
+                }
+
+                list.innerHTML = this.notifications.map(n => `
+                    <div onclick="collab.markNotificationRead('${n._id}')" class="p-3 text-left hover:bg-slate-50 dark:hover:bg-slate-900/50 cursor-pointer ${n.isRead ? 'opacity-60' : 'bg-sky-500/5'}">
+                        <p class="font-semibold text-[11px] text-slate-800 dark:text-slate-200">${n.content}</p>
+                        <p class="text-[8px] text-slate-500 mt-1 font-bold">${new Date(n.createdAt).toLocaleDateString('en-GB')}</p>
+                    </div>
+                `).join('');
+            },
+
+            async markNotificationRead(id) {
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    await fetch(`http://localhost:5000/api/notifications/${id}/read`, {
+                        method: 'PUT',
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    this.fetchNotifications();
+                } catch (e) {}
+            },
+
+            async markAllNotificationsRead() {
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    await fetch('http://localhost:5000/api/notifications/read/all', {
+                        method: 'PUT',
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    this.fetchNotifications();
+                } catch (e) {}
+            },
+
+            lockActivity(seq) {
+                if (!this.projectId || !this.socket) return;
+                const act = this.activities.find(a => a.sequenceNumber === seq);
+                if (act) {
+                    this.socket.emit('edit-activity-start', {
+                        projectId: this.projectId,
+                        activityId: act._id
+                    });
+                }
+            },
+
+            unlockActivity(seq) {
+                if (!this.projectId || !this.socket) return;
+                const act = this.activities.find(a => a.sequenceNumber === seq);
+                if (act) {
+                    this.socket.emit('edit-activity-end', {
+                        projectId: this.projectId,
+                        activityId: act._id
+                    });
+                }
+            },
+
+            renderPresence() {
+                const container = document.getElementById('collab-presence-container');
+                if (!container) return;
+                if (this.onlineUsers.length === 0) {
+                    container.innerHTML = '';
+                    return;
+                }
+                const avatars = this.onlineUsers.map(u => {
+                    const initials = u.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+                    return `<div class="h-6 w-6 rounded-full bg-sky-500/10 border border-sky-500/30 text-sky-500 text-[9px] font-black font-outfit flex items-center justify-center shadow-sm" title="${u.name} (Online)">${initials}</div>`;
+                }).join('');
+                container.innerHTML = `
+                    <div class="flex -space-x-1.5 mr-1.5">${avatars}</div>
+                    <span class="text-[9px] font-bold text-slate-400 font-outfit uppercase tracking-widest">${this.onlineUsers.length} online</span>
+                `;
+            },
+
+            renderLocks() {
+                const rows = document.querySelectorAll('tbody tr');
+                rows.forEach(row => {
+                    const seqCell = row.querySelector('td:first-child');
+                    if (seqCell) {
+                        const seqStr = seqCell.innerText.trim();
+                        const act = this.activities.find(a => a.sequenceNumber === parseInt(seqStr));
+                        if (act) {
+                            const lock = this.activeLocks.get(act._id.toString());
+                            const editBtn = row.querySelector('button[onclick^="openEditActivityModal"]');
+                            const lockIndicator = row.querySelector('.collab-lock-indicator');
+                            
+                            if (lock) {
+                                if (editBtn) editBtn.disabled = true;
+                                if (!lockIndicator) {
+                                    const taskStepCell = row.querySelector('td:nth-child(2)');
+                                    if (taskStepCell) {
+                                        taskStepCell.insertAdjacentHTML('beforeend', `
+                                            <p class="collab-lock-indicator text-[9px] text-amber-500 font-bold mt-1 flex items-center gap-1">
+                                                <i class="fa-solid fa-lock animate-pulse"></i> ${lock.userName} is editing...
+                                            </p>
+                                        `);
+                                    }
+                                }
+                            } else {
+                                if (editBtn) editBtn.disabled = false;
+                                if (lockIndicator) lockIndicator.remove();
+                            }
+                        }
+                    }
+                });
+            },
+
+            // COLLAB DISCUSSIONS
+            async fetchComments() {
+                if (!this.projectId) return;
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    const res = await fetch(`http://localhost:5000/api/comments/project/${this.projectId}`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const comments = await res.json();
+                    this.renderComments(comments);
+                } catch(e) {}
+            },
+
+            renderComments(comments) {
+                const container = document.getElementById('collab-comments-tab-content');
+                if (!container) return;
+
+                // Group comments and replies
+                const parents = comments.filter(c => !c.parentCommentId);
+                const repliesMap = new Map();
+                comments.forEach(c => {
+                    if (c.parentCommentId) {
+                        const pid = c.parentCommentId.toString();
+                        if (!repliesMap.has(pid)) repliesMap.set(pid, []);
+                        repliesMap.get(pid).push(c);
+                    }
+                });
+
+                const html = `
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 py-6">
+                        <div class="lg:col-span-2 flex flex-col bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+                            <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2">
+                                <i class="fa-solid fa-comments text-sky-500"></i> Project Discussion Thread
+                            </h3>
+                            
+                            <!-- Comment input -->
+                            <div class="mb-6">
+                                <textarea id="new-comment-text" placeholder="Write a comment..." class="w-full text-xs p-3 border border-slate-200 dark:border-slate-850 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 resize-none h-20 font-semibold"></textarea>
+                                <div class="flex justify-end mt-2">
+                                    <button onclick="collab.addComment()" class="bg-sky-500 hover:bg-sky-600 text-white font-bold text-xs px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5"><i class="fa-solid fa-paper-plane text-[10px]"></i> Send Comment</button>
+                                </div>
+                            </div>
+
+                            <div class="space-y-4 max-h-[450px] overflow-y-auto pr-2 divide-y divide-slate-100 dark:divide-slate-850">
+                                ${parents.length === 0 ? `<p class="text-center text-slate-400 py-6 text-xs font-bold">No comments yet. Start the conversation!</p>` : parents.map(c => {
+                                    const cReplies = repliesMap.get(c._id.toString()) || [];
+                                    const initials = c.userName ? c.userName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'U';
+                                    const canDelete = store.user.role === 'Admin' || c.userId === (JSON.parse(localStorage.getItem('collab_user'))?._id);
+
+                                    return `
+                                        <div class="pt-4 first:pt-0">
+                                            <div class="flex items-start gap-3">
+                                                <div class="h-8 w-8 rounded-xl bg-sky-500/10 text-sky-500 border border-sky-500/20 flex items-center justify-center text-xs font-black shrink-0">${initials}</div>
+                                                <div class="flex-1 min-w-0">
+                                                    <div class="flex justify-between items-center">
+                                                        <h4 class="text-xs font-bold text-slate-800 dark:text-slate-200">${c.userName}</h4>
+                                                        <div class="flex items-center gap-2">
+                                                            <span class="text-[9px] text-slate-400 font-bold">${new Date(c.createdAt).toLocaleDateString('en-GB')}</span>
+                                                            ${canDelete ? `<button onclick="collab.deleteComment('${c._id}')" class="text-rose-500 hover:text-rose-600" title="Delete"><i class="fa-regular fa-trash-can text-[10px]"></i></button>` : ''}
+                                                        </div>
+                                                    </div>
+                                                    <p class="text-xs text-slate-600 dark:text-slate-350 mt-1 font-semibold">${c.content}</p>
+                                                    
+                                                    <div class="mt-2 flex items-center gap-2">
+                                                        <button onclick="collab.toggleReplyForm('${c._id}')" class="text-[10px] text-sky-500 hover:underline font-bold"><i class="fa-solid fa-reply text-[8px]"></i> Reply</button>
+                                                    </div>
+
+                                                    <!-- Reply Input Form -->
+                                                    <div id="reply-form-${c._id}" class="hidden mt-3">
+                                                        <div class="flex gap-2">
+                                                            <input type="text" id="reply-input-${c._id}" placeholder="Write a reply..." class="flex-1 text-xs p-2 border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-lg focus:outline-none font-semibold">
+                                                            <button onclick="collab.addComment('${c._id}')" class="bg-sky-500 hover:bg-sky-600 text-white font-bold text-xs px-3 rounded-lg transition-colors">Reply</button>
+                                                            <button onclick="collab.toggleReplyForm('${c._id}')" class="px-2 text-slate-400 hover:text-rose-500 text-xs">Cancel</button>
+                                                        </div>
+                                                    </div>
+
+                                                    <!-- Replies list -->
+                                                    ${cReplies.length > 0 ? `
+                                                        <div class="mt-3 pl-4 border-l border-slate-100 dark:border-slate-850 space-y-3">
+                                                            ${cReplies.map(r => {
+                                                                const rInitials = r.userName ? r.userName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'U';
+                                                                const rCanDelete = store.user.role === 'Admin' || r.userId === (JSON.parse(localStorage.getItem('collab_user'))?._id);
+
+                                                                return `
+                                                                    <div class="flex items-start gap-2.5">
+                                                                        <div class="h-6 w-6 rounded-lg bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 flex items-center justify-center text-[10px] font-black shrink-0">${rInitials}</div>
+                                                                        <div class="flex-1 min-w-0">
+                                                                            <div class="flex justify-between items-center">
+                                                                                <h5 class="text-[11px] font-bold text-slate-800 dark:text-slate-200">${r.userName}</h5>
+                                                                                <div class="flex items-center gap-2">
+                                                                                    <span class="text-[8px] text-slate-400 font-bold">${new Date(r.createdAt).toLocaleDateString('en-GB')}</span>
+                                                                                    ${rCanDelete ? `<button onclick="collab.deleteComment('${r._id}')" class="text-rose-500 hover:text-rose-600" title="Delete"><i class="fa-regular fa-trash-can text-[9px]"></i></button>` : ''}
+                                                                                </div>
+                                                                            </div>
+                                                                            <p class="text-[11px] text-slate-600 dark:text-slate-350 mt-0.5 font-semibold">${r.content}</p>
+                                                                        </div>
+                                                                    </div>
+                                                                `;
+                                                            }).join('')}
+                                                        </div>
+                                                    ` : ''}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </div>
+
+                        <!-- Sidebar: Audit log timeline -->
+                        <div class="flex flex-col bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+                            <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2">
+                                <i class="fa-solid fa-clock-rotate-left text-emerald-500"></i> Project Activity Stream
+                            </h3>
+                            <div id="collab-audit-list" class="space-y-4 max-h-[500px] overflow-y-auto pr-2 text-xs font-semibold">
+                                <p class="text-slate-400 text-center py-6">Loading activities...</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                container.innerHTML = html;
+                this.fetchAuditLogs();
+            },
+
+            async fetchAuditLogs() {
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    const res = await fetch(`http://localhost:5000/api/activities/project/${this.projectId}/timeline`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const logs = await res.json();
+                    const list = document.getElementById('collab-audit-list');
+                    if (!list) return;
+
+                    if (logs.length === 0) {
+                        list.innerHTML = `<p class="text-center text-slate-400 py-6">No edits recorded yet.</p>`;
+                        return;
+                    }
+
+                    list.innerHTML = logs.map(l => `
+                        <div class="relative pl-5 border-l border-slate-100 dark:border-slate-850 pb-2">
+                            <div class="absolute -left-1.5 top-1 h-3 w-3 rounded-full bg-emerald-500 border border-white dark:border-slate-950"></div>
+                            <p class="font-bold text-slate-800 dark:text-slate-200">${l.activityName || 'Task Update'}</p>
+                            <p class="text-[10px] text-slate-500 mt-0.5">${l.userName || 'System'} changed <span class="font-bold text-sky-500">${l.fieldChanged}</span> from "${l.oldValue || 'N/A'}" to "${l.newValue || 'N/A'}"</p>
+                            <p class="text-[8px] text-slate-400 mt-1 font-bold">${new Date(l.changedAt).toLocaleDateString('en-GB')} ${new Date(l.changedAt).toLocaleTimeString()}</p>
+                        </div>
+                    `).join('');
+                } catch(e) {}
+            },
+
+            toggleReplyForm(id) {
+                const el = document.getElementById(`reply-form-${id}`);
+                if (el) el.classList.toggle('hidden');
+            },
+
+            async addComment(parentId = null) {
+                let content = '';
+                if (parentId) {
+                    const input = document.getElementById(`reply-input-${parentId}`);
+                    if (input) {
+                        content = input.value.trim();
+                        input.value = '';
+                    }
+                } else {
+                    const input = document.getElementById('new-comment-text');
+                    if (input) {
+                        content = input.value.trim();
+                        input.value = '';
+                    }
+                }
+                if (!content) return;
+
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    await fetch('http://localhost:5000/api/comments', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify({
+                            projectId: this.projectId,
+                            content,
+                            parentCommentId: parentId
+                        })
+                    });
+                    this.fetchComments();
+                } catch(e) {}
+            },
+
+            async deleteComment(id) {
+                if (!confirm("Are you sure you want to delete this comment?")) return;
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    await fetch(`http://localhost:5000/api/comments/${id}`, {
+                        method: 'DELETE',
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    this.fetchComments();
+                } catch(e) {}
+            },
+
+            // COLLAB FILE MANAGER
+            async fetchDocuments() {
+                if (!this.projectId) return;
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    const res = await fetch(`http://localhost:5000/api/documents/project/${this.projectId}`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const docs = await res.json();
+                    this.renderDocuments(docs);
+                } catch (e) {}
+            },
+
+            renderDocuments(docs) {
+                const container = document.getElementById('collab-documents-tab-content');
+                if (!container) return;
+
+                const html = `
+                    <div class="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm py-6">
+                        <div class="flex justify-between items-center mb-6">
+                            <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                                <i class="fa-solid fa-folder-open text-sky-500"></i> Acquisition Blueprint & Drawings
+                            </h3>
+                            <div>
+                                <label class="bg-sky-500 hover:bg-sky-600 text-white font-bold text-xs px-4 py-2 rounded-lg cursor-pointer transition-colors flex items-center gap-1.5">
+                                    <i class="fa-solid fa-cloud-arrow-up"></i> Upload Blueprint
+                                    <input type="file" onchange="collab.uploadFile(this.files[0])" class="hidden">
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-slate-100 dark:divide-slate-850 text-xs font-semibold text-left">
+                                <thead>
+                                    <tr class="text-slate-400 dark:text-slate-500 uppercase tracking-widest text-[9px] font-black border-b border-slate-100 dark:border-slate-850">
+                                        <th class="py-3">Name</th>
+                                        <th class="py-3">Uploaded By</th>
+                                        <th class="py-3">Uploaded Date</th>
+                                        <th class="py-3">Current Version</th>
+                                        <th class="py-3 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-50 dark:divide-slate-900">
+                                    ${docs.length === 0 ? `
+                                        <tr>
+                                            <td colspan="5" class="py-12 text-center text-slate-450 dark:text-slate-500 font-bold">No documents uploaded yet. Upload templates or vessel blueprints to share.</td>
+                                        </tr>
+                                    ` : docs.map(d => {
+                                        const initials = d.userName ? d.userName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'U';
+                                        return `
+                                            <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-900/30">
+                                                <td class="py-4">
+                                                    <div class="flex items-center gap-2.5">
+                                                        <i class="fa-solid fa-file-pdf text-rose-500 text-base"></i>
+                                                        <span class="font-bold text-slate-800 dark:text-slate-200">${d.filename}</span>
+                                                    </div>
+                                                </td>
+                                                <td class="py-4">
+                                                    <div class="flex items-center gap-2">
+                                                        <span class="h-5 w-5 rounded-lg bg-sky-500/10 text-sky-500 flex items-center justify-center text-[9px] font-black">${initials}</span>
+                                                        <span>${d.userName}</span>
+                                                    </div>
+                                                </td>
+                                                <td class="py-4 text-slate-500 dark:text-slate-450">${new Date(d.uploadedAt).toLocaleDateString('en-GB')}</td>
+                                                <td class="py-4"><span class="px-2 py-0.5 rounded-full bg-sky-100 dark:bg-sky-950/30 text-sky-700 dark:text-sky-400 text-[10px] font-bold">v${d.currentVersion}</span></td>
+                                                <td class="py-4 text-right space-x-2">
+                                                    <button onclick="collab.downloadFile('${d._id}', '${d.filename}')" class="text-sky-500 hover:text-sky-600" title="Download"><i class="fa-solid fa-download text-sm"></i></button>
+                                                    <button onclick="collab.deleteDocument('${d._id}')" class="text-rose-500 hover:text-rose-600" title="Delete"><i class="fa-regular fa-trash-can text-sm"></i></button>
+                                                </td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+                container.innerHTML = html;
+            },
+
+            async uploadFile(file) {
+                if (!file) return;
+                const fd = new FormData();
+                fd.append('file', file);
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    const res = await fetch(`http://localhost:5000/api/documents/project/${this.projectId}`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${token}` },
+                        body: fd
+                    });
+                    if (res.ok) {
+                        showToast("Document uploaded successfully!", "success");
+                        this.fetchDocuments();
+                    } else {
+                        const err = await res.json();
+                        showToast("Upload failed: " + err.message, "error");
+                    }
+                } catch(e) {}
+            },
+
+            async downloadFile(id, filename) {
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    const res = await fetch(`http://localhost:5000/api/documents/download/${id}`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                } catch(e) {}
+            },
+
+            async deleteDocument(id) {
+                if (!confirm("Are you sure you want to delete this document?")) return;
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    await fetch(`http://localhost:5000/api/documents/${id}`, {
+                        method: 'DELETE',
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    this.fetchDocuments();
+                } catch(e) {}
+            },
+
+            // COLLAB ACCESS CONTROL
+            async fetchCollaborators() {
+                if (!this.projectId) return;
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    const res = await fetch(`http://localhost:5000/api/auth/projects/${this.projectId}/collaborators`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const collaborators = await res.json();
+                    this.renderCollaborators(collaborators);
+                } catch(e) {}
+            },
+
+            renderCollaborators(collabs) {
+                const container = document.getElementById('collab-access-tab-content');
+                if (!container) return;
+
+                const html = `
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 py-6">
+                        <div class="lg:col-span-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+                            <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2">
+                                <i class="fa-solid fa-users text-sky-500"></i> Project Collaborators (${collabs.length})
+                            </h3>
+                            <div class="overflow-x-auto">
+                                <table class="min-w-full divide-y divide-slate-100 dark:divide-slate-850 text-xs font-semibold text-left">
+                                    <thead>
+                                        <tr class="text-slate-400 dark:text-slate-500 uppercase tracking-widest text-[9px] font-black border-b border-slate-100 dark:border-slate-850">
+                                            <th class="py-3">Name</th>
+                                            <th class="py-3">Email</th>
+                                            <th class="py-3">Role</th>
+                                            <th class="py-3">Status</th>
+                                            <th class="py-3 text-right">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-50 dark:divide-slate-900">
+                                        ${collabs.map(c => {
+                                            const initials = c.userId?.name ? c.userId.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'U';
+                                            const isSelf = c.userId?._id === (JSON.parse(localStorage.getItem('collab_user'))?._id);
+                                            const canRemove = store.user.role === 'Admin' && !isSelf;
+
+                                            return `
+                                                <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-900/30">
+                                                    <td class="py-4">
+                                                        <div class="flex items-center gap-2">
+                                                            <div class="h-6 w-6 rounded-lg bg-sky-500/10 text-sky-500 border border-sky-500/20 flex items-center justify-center text-[10px] font-black shrink-0">${initials}</div>
+                                                            <span class="font-bold text-slate-800 dark:text-slate-200">${c.userId?.name} ${isSelf ? '<span class="text-[9px] text-slate-400 font-bold">(You)</span>' : ''}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td class="py-4 text-slate-500 dark:text-slate-400">${c.userId?.email}</td>
+                                                    <td class="py-4"><span class="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[10px] font-bold text-slate-600 dark:text-slate-400">${c.role}</span></td>
+                                                    <td class="py-4"><span class="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400 text-[10px] font-bold">${c.status}</span></td>
+                                                    <td class="py-4 text-right">
+                                                        ${canRemove ? `<button onclick="collab.removeCollaborator('${c.userId?._id}')" class="text-rose-500 hover:text-rose-600 font-bold hover:underline">Remove</button>` : '-'}
+                                                    </td>
+                                                </tr>
+                                            `;
+                                        }).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Invite Form Sidebar -->
+                        <div class="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+                            <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2">
+                                <i class="fa-solid fa-paper-plane text-sky-500"></i> Invite Collaborator
+                            </h3>
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="block text-[10px] font-black uppercase text-slate-450 dark:text-slate-500 tracking-wider mb-2">User Email Address</label>
+                                    <input type="email" id="invite-email" placeholder="collaborator@navalpmis.gov" class="w-full text-xs p-2.5 border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-xl focus:outline-none font-semibold">
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] font-black uppercase text-slate-450 dark:text-slate-500 tracking-wider mb-2">Project Role</label>
+                                    <select id="invite-role" class="w-full text-xs p-2.5 border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white rounded-xl focus:outline-none font-semibold">
+                                        <option value="Project Manager">Project Manager</option>
+                                        <option value="Engineer">Engineer</option>
+                                        <option value="Viewer">Viewer</option>
+                                    </select>
+                                </div>
+                                <button onclick="collab.inviteUser()" class="w-full bg-sky-500 hover:bg-sky-600 text-white font-bold text-xs p-2.5 rounded-xl transition-colors">Send Invitation Link</button>
+                                
+                                <div id="invite-link-container" class="hidden pt-4 border-t border-slate-100 dark:border-slate-850 space-y-2">
+                                    <label class="block text-[10px] font-black uppercase text-slate-450 dark:text-slate-500 tracking-wider">Invitation Link</label>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="invite-link" readonly class="flex-1 text-[10px] p-2 bg-slate-100 dark:bg-slate-900 text-slate-500 rounded-lg select-all border border-slate-200 dark:border-slate-850">
+                                        <button onclick="collab.copyInviteLink()" class="px-3 bg-sky-500 text-white font-bold text-xs rounded-lg hover:bg-sky-600 transition-colors"><i class="fa-regular fa-copy"></i></button>
+                                    </div>
+                                    <p class="text-[9px] text-slate-450 dark:text-slate-500 font-bold mt-2">Copy this link and send it to the collaborator, or click below to join directly:</p>
+                                    <button onclick="collab.joinDirectly()" class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs p-2 rounded-xl transition-colors">Test Link (Accept Invitation)</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                container.innerHTML = html;
+            },
+
+            async inviteUser() {
+                const email = document.getElementById('invite-email').value.trim();
+                const role = document.getElementById('invite-role').value;
+                if (!email) return;
+
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    const res = await fetch('http://localhost:5000/api/auth/invite', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify({
+                            projectId: this.projectId,
+                            email,
+                            role
+                        })
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.inviteLink) {
+                        showToast("Invitation link generated successfully!", "success");
+                        const linkInput = document.getElementById('invite-link');
+                        const linkContainer = document.getElementById('invite-link-container');
+                        if (linkInput && linkContainer) {
+                            linkInput.value = data.inviteLink;
+                            linkContainer.classList.remove('hidden');
+                        }
+                        this.fetchCollaborators();
+                    } else {
+                        showToast("Failed to invite: " + data.message, "error");
+                    }
+                } catch(e) {}
+            },
+
+            copyInviteLink() {
+                const linkInput = document.getElementById('invite-link');
+                if (linkInput) {
+                    linkInput.select();
+                    document.execCommand('copy');
+                    showToast("Invitation link copied to clipboard!", "success");
+                }
+            },
+
+            async joinDirectly() {
+                const linkInput = document.getElementById('invite-link');
+                if (linkInput && linkInput.value) {
+                    const url = new URL(linkInput.value);
+                    const code = url.searchParams.get('code');
+                    try {
+                        const token = localStorage.getItem('collab_token');
+                        const res = await fetch('http://localhost:5000/api/auth/accept', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`
+                            },
+                            body: JSON.stringify({ code })
+                        });
+                        if (res.ok) {
+                            showToast("Invitation accepted! Added to project.", "success");
+                            this.fetchCollaborators();
+                        } else {
+                            const err = await res.json();
+                            showToast("Failed to accept: " + err.message, "error");
+                        }
+                    } catch(e) {}
+                }
+            },
+
+            async removeCollaborator(userId) {
+                if (!confirm("Are you sure you want to remove this collaborator?")) return;
+                try {
+                    const token = localStorage.getItem('collab_token');
+                    const res = await fetch('http://localhost:5000/api/auth/remove', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify({
+                            projectId: this.projectId,
+                            userId
+                        })
+                    });
+                    if (res.ok) {
+                        showToast("Collaborator removed successfully.", "success");
+                        this.fetchCollaborators();
+                    } else {
+                        const err = await res.json();
+                        showToast("Failed to remove: " + err.message, "error");
+                    }
+                } catch(e) {}
+            }
+        };
+
         const API_BASE = window.location.origin;
 
         // Date formatter helper (DD-MM-YYYY)
@@ -240,6 +1035,26 @@
                     store.user = data.user;
                     localStorage.setItem('pmis_token', data.access_token);
                     localStorage.setItem('pmis_user', JSON.stringify(data.user));
+
+                    // Silent login to collaboration backend
+                    const email = emailMap[username.toLowerCase()] || (username.includes('@') ? username : `${username}@navalpmis.gov`);
+                    const collabPassword = password === 'admin' ? 'password123' : password;
+                    
+                    fetch('http://localhost:5000/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email, password: collabPassword })
+                    })
+                    .then(res => res.json())
+                    .then(collabData => {
+                        if (collabData.token) {
+                            localStorage.setItem('collab_token', collabData.token);
+                            localStorage.setItem('collab_user', JSON.stringify(collabData.user));
+                            collab.init();
+                        }
+                    })
+                    .catch(err => console.error("Collab authentication failed:", err));
+
                     showToast("Login successful!", "success");
                     
                     if (data.user.role === 'Admin' && data.user.is_first_login) {
@@ -257,6 +1072,12 @@
             store.user = null;
             localStorage.removeItem('pmis_token');
             localStorage.removeItem('pmis_user');
+            localStorage.removeItem('collab_token');
+            localStorage.removeItem('collab_user');
+            if (collab.socket) {
+                collab.socket.disconnect();
+                collab.socket = null;
+            }
             store.currentView = 'login';
             render();
         }
@@ -302,6 +1123,15 @@
 
         // Router
         function navigate(view, projectId = null) {
+            // Leave old project collab session if navigating away
+            if (view !== 'project-view' && collab.projectId) {
+                collab.leaveProject(collab.projectId);
+                collab.project = null;
+                collab.projectId = null;
+                collab.onlineUsers = [];
+                collab.renderPresence();
+            }
+
             store.currentView = view;
             if (projectId) {
                 store.currentProjectId = projectId;
@@ -340,6 +1170,11 @@
                 store.currentActivities = await apiRequest(`/api/projects/${projectId}/activities`);
                 store.ganttData = await apiRequest(`/api/dashboard/gantt/${projectId}`);
                 
+                // Sync collaboration context
+                if (store.currentProject) {
+                    collab.syncProjectContext(store.currentProject.project_id_code);
+                }
+
                 // Get latest predictions or trigger one if not present
                 try {
                     store.predictions = await apiRequest(`/api/projects/${projectId}/predict`, 'POST');
@@ -363,11 +1198,45 @@
 
         async function updateActivityDetails(activityId, updates) {
             try {
+                // Find local activity to map sequence number
+                const localAct = store.currentActivities.find(a => a.id === activityId);
+                if (localAct && collab.projectId) {
+                    const collabAct = collab.activities.find(a => a.sequenceNumber === localAct.sequence_number);
+                    if (collabAct) {
+                        const token = localStorage.getItem('collab_token');
+                        const nodeRes = await fetch(`http://localhost:5000/api/activities/${collabAct._id}`, {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`
+                            },
+                            body: JSON.stringify({
+                                currentStatus: updates.current_status || localAct.current_status,
+                                completionPercentage: updates.completion_percentage !== undefined ? updates.completion_percentage : localAct.completion_percentage,
+                                actualStartDate: updates.actual_start_date !== undefined ? (updates.actual_start_date === 'N/A' || !updates.actual_start_date ? null : updates.actual_start_date) : localAct.actual_start_date,
+                                actualEndDate: updates.actual_end_date !== undefined ? (updates.actual_end_date === 'N/A' || !updates.actual_end_date ? null : updates.actual_end_date) : localAct.actual_end_date,
+                                durationMonths: updates.duration_months !== undefined ? updates.duration_months : localAct.duration_months,
+                                remainingMonths: updates.remaining_months !== undefined ? updates.remaining_months : localAct.remaining_months,
+                                remarks: updates.remarks || updates.change_reason || localAct.remarks,
+                                version: collabAct.__v
+                            })
+                        });
+                        
+                        if (!nodeRes.ok) {
+                            const errData = await nodeRes.json();
+                            showToast("Collaboration block: " + errData.message, "error");
+                            return; // Block SQLite write
+                        }
+                    }
+                }
+
                 await apiRequest(`/api/projects/${store.currentProjectId}/activities/${activityId}`, 'PUT', updates);
                 showToast("Activity updated successfully. Schedule re-calculated.", "success");
                 // Reload project details
                 loadProjectWorkspace(store.currentProjectId);
-            } catch (err) {}
+            } catch (err) {
+                showToast("Update failed: " + err.message, "error");
+            }
         }
 
         async function changeActivityDurationMonths(activityId, durationMonthsValue) {
@@ -434,6 +1303,12 @@
                 </div>
             `;
             root.appendChild(mainContainer);
+
+            // Apply collaboration decorations
+            if (store.currentView === 'project-view') {
+                collab.renderPresence();
+                collab.renderLocks();
+            }
         }
 
         // HTML Screen Component Generators
@@ -559,14 +1434,19 @@
                             <!-- Navigation Links -->
                             <div class="flex-1 flex flex-col overflow-y-auto py-6">
                                 <nav class="flex-1 px-2 space-y-1.5">
-                                    ${!isWizard ? `
+                                    ${(store.user.role === 'ProjectManager' || store.user.role === 'Viewer') && !isWizard ? `
                                         <a href="#" onclick="navigate('dashboard')" class="group flex items-center justify-center p-2.5 rounded-xl transition-all duration-250 ${current === 'dashboard' ? 'bg-sky-500/10 text-sky-400' : 'hover:bg-slate-900/60 hover:text-white'}" title="Dashboard">
                                             <i class="fa-solid fa-chart-line text-sm transition-transform group-hover:scale-110"></i>
                                         </a>
                                     ` : ''}
-                                    <a href="#" onclick="navigate('template-builder')" class="group flex items-center justify-center p-2.5 rounded-xl transition-all duration-250 ${current === 'template-builder' ? 'bg-sky-500/10 text-sky-400' : 'hover:bg-slate-900/60 hover:text-white'}" title="Template Builder">
-                                        <i class="fa-solid fa-diagram-project text-sm transition-transform group-hover:scale-110"></i>
-                                    </a>
+                                    ${store.user.role === 'Admin' ? `
+                                        <a href="#" onclick="navigate('template-builder')" class="group flex items-center justify-center p-2.5 rounded-xl transition-all duration-250 ${current === 'template-builder' ? 'bg-sky-500/10 text-sky-400' : 'hover:bg-slate-900/60 hover:text-white'}" title="Template Builder">
+                                            <i class="fa-solid fa-diagram-project text-sm transition-transform group-hover:scale-110"></i>
+                                        </a>
+                                        <a href="#" onclick="navigate('user-management')" class="group flex items-center justify-center p-2.5 rounded-xl transition-all duration-250 ${current === 'user-management' ? 'bg-sky-500/10 text-sky-400' : 'hover:bg-slate-900/60 hover:text-white'}" title="User Management">
+                                            <i class="fa-solid fa-users text-sm transition-transform group-hover:scale-110"></i>
+                                        </a>
+                                    ` : ''}
                                 </nav>
                             </div>
                             
@@ -595,14 +1475,19 @@
                         <!-- Navigation Links -->
                         <div class="flex-1 flex flex-col overflow-y-auto py-6">
                             <nav class="flex-1 px-4 space-y-1.5">
-                                ${!isWizard ? `
+                                ${(store.user.role === 'ProjectManager' || store.user.role === 'Viewer') && !isWizard ? `
                                     <a href="#" onclick="navigate('dashboard')" class="group flex items-center px-4 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all duration-250 ${current === 'dashboard' ? 'bg-sky-500/10 text-sky-400 border-l-2 border-sky-400 pl-3.5' : 'hover:bg-slate-900/60 hover:text-white'}">
                                         <i class="fa-solid fa-chart-line mr-3 text-sm transition-transform group-hover:scale-110"></i> Dashboard
                                     </a>
                                 ` : ''}
-                                <a href="#" onclick="navigate('template-builder')" class="group flex items-center px-4 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all duration-250 ${current === 'template-builder' ? 'bg-sky-500/10 text-sky-400 border-l-2 border-sky-400 pl-3.5' : 'hover:bg-slate-900/60 hover:text-white'}">
-                                    <i class="fa-solid fa-diagram-project mr-3 text-sm transition-transform group-hover:scale-110"></i> Template Builder
-                                </a>
+                                ${store.user.role === 'Admin' ? `
+                                    <a href="#" onclick="navigate('template-builder')" class="group flex items-center px-4 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all duration-250 ${current === 'template-builder' ? 'bg-sky-500/10 text-sky-400 border-l-2 border-sky-400 pl-3.5' : 'hover:bg-slate-900/60 hover:text-white'}">
+                                        <i class="fa-solid fa-diagram-project mr-3 text-sm transition-transform group-hover:scale-110"></i> Template Builder
+                                    </a>
+                                    <a href="#" onclick="navigate('user-management')" class="group flex items-center px-4 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all duration-250 ${current === 'user-management' ? 'bg-sky-500/10 text-sky-400 border-l-2 border-sky-400 pl-3.5' : 'hover:bg-slate-900/60 hover:text-white'}">
+                                        <i class="fa-solid fa-users mr-3 text-sm transition-transform group-hover:scale-110"></i> User Management
+                                    </a>
+                                ` : ''}
                             </nav>
                         </div>
                         
@@ -616,7 +1501,7 @@
                                         </div>
                                         <div class="max-w-[120px] truncate">
                                             <p class="text-xs font-bold text-white truncate">${store.user.username}</p>
-                                            <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest capitalize">${store.user.role}</p>
+                                            <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest truncate capitalize">${store.user.role}</p>
                                         </div>
                                     </div>
                                     <button onclick="logout()" class="text-slate-500 hover:text-rose-400 p-2 rounded-lg hover:bg-slate-900/60 transition-all duration-200" title="Log Out">
@@ -648,6 +1533,13 @@
             }
             breadcrumbs += `</div>`;
 
+            // Toggle notification dropdown
+            window.toggleNotifDropdown = function(event) {
+                if (event) event.stopPropagation();
+                const dd = document.getElementById('collab-notif-dropdown');
+                if (dd) dd.classList.toggle('hidden');
+            };
+
             return `
                 <header class="h-16 bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-900 flex items-center justify-between px-6 flex-shrink-0 transition-colors duration-300">
                     <!-- Breadcrumbs left -->
@@ -662,12 +1554,32 @@
                             <i class="fa-solid fa-magnifying-glass absolute left-3 text-slate-400 text-xs"></i>
                             <input type="text" placeholder="Search... (Ctrl+K)" readonly onclick="toggleCommandPalette()" class="w-48 pl-9 pr-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-400 focus:outline-none cursor-pointer hover:border-slate-350 transition-colors">
                         </div>
+
+                        <!-- Collaboration Notifications Bell -->
+                        <div class="relative inline-block" id="collab-notif-container">
+                            <button onclick="toggleNotifDropdown(event)" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800/80 transition-all duration-200 relative" title="Notifications">
+                                <i class="fa-solid fa-bell text-xs"></i>
+                                <span id="collab-notif-badge" class="hidden absolute top-1 right-1 h-2 w-2 rounded-full bg-rose-500 border border-white dark:border-slate-950"></span>
+                            </button>
+                            <div id="collab-notif-dropdown" class="hidden absolute right-0 mt-2 w-72 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-850 rounded-xl shadow-xl z-50 overflow-hidden text-xs text-slate-800 dark:text-slate-200">
+                                <div class="p-3 border-b border-slate-100 dark:border-slate-850 flex justify-between items-center font-bold">
+                                    <span>Notifications</span>
+                                    <button onclick="collab.markAllNotificationsRead(); event.stopPropagation();" class="text-[9px] text-sky-500 hover:underline">Mark all read</button>
+                                </div>
+                                <div id="collab-notif-list" class="max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-850">
+                                    <div class="p-4 text-center text-slate-400">No notifications.</div>
+                                </div>
+                            </div>
+                        </div>
                         
                         <!-- Theme switch -->
                         <button onclick="toggleTheme()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800/80 transition-all duration-200" title="Toggle Appearance">
                             <i class="fa-solid ${store.theme === 'light' ? 'fa-moon' : 'fa-sun'} text-xs"></i>
                         </button>
                         
+                        <!-- Presence Indicators -->
+                        <div id="collab-presence-container" class="flex items-center"></div>
+
                         <!-- Security Badge -->
                         <div class="h-8 w-px bg-slate-200 dark:bg-slate-900"></div>
                         <div class="flex items-center gap-2">
@@ -953,7 +1865,7 @@
                                         </div>
                                         <div>
                                             <label class="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Customer / Command</label>
-                                            <input type="text" name="customer" placeholder="e.g. Western Naval Command" class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all">
+                                            <input type="text" name="customer" value="Indian Navy" readonly class="mt-1 block w-full px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-100 dark:bg-slate-900/60 text-slate-500 text-xs font-semibold focus:outline-none cursor-not-allowed">
                                         </div>
                                     </div>
                                 </div>
@@ -1005,6 +1917,21 @@
                 showToast("Activity not found in current project.", "error");
                 return;
             }
+
+            // Collaboration lock check
+            if (collab.projectId) {
+                const collabAct = collab.activities.find(a => a.sequenceNumber === activity.sequence_number);
+                if (collabAct) {
+                    const lock = collab.activeLocks.get(collabAct._id.toString());
+                    if (lock) {
+                        showToast(`Locked: This task is currently being edited by ${lock.userName || 'another user'}.`, "error");
+                        return;
+                    }
+                    collab.lockActivity(activity.sequence_number);
+                    store.editingSequenceNumber = activity.sequence_number;
+                }
+            }
+
             const form = document.getElementById('editActivityForm');
             form.activity_id.value = activity.id;
             form.current_status.value = activity.current_status || 'NotStarted';
@@ -1021,6 +1948,10 @@
 
         function closeEditActivityModal() {
             document.getElementById('editActivityModal').classList.add('hidden');
+            if (store.editingSequenceNumber) {
+                collab.unlockActivity(store.editingSequenceNumber);
+                store.editingSequenceNumber = null;
+            }
         }
 
         async function submitEditActivityForm(form) {
@@ -1567,21 +2498,30 @@ feedback_loops: wizardLoops
                     ${renderPredictionsDashboardHeader()}
 
                     <!-- Tab navigation -->
-                    <div class="border-b border-slate-200 dark:border-slate-900 flex items-center gap-6 select-none">
-                        <button onclick="switchTab('activities')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${activeTab === 'activities' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                    <div class="border-b border-slate-200 dark:border-slate-900 flex items-center gap-6 select-none overflow-x-auto">
+                        <button onclick="switchTab('activities')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all shrink-0 ${activeTab === 'activities' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
                             <i class="fa-solid fa-clipboard-list mr-2"></i> Activities & Updates
                         </button>
-                        <button onclick="switchTab('kanban')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${activeTab === 'kanban' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                        <button onclick="switchTab('kanban')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all shrink-0 ${activeTab === 'kanban' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
                             <i class="fa-solid fa-square-poll-vertical mr-2"></i> Kanban Board
                         </button>
-                        <button onclick="switchTab('gantt')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${activeTab === 'gantt' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                        <button onclick="switchTab('gantt')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all shrink-0 ${activeTab === 'gantt' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
                             <i class="fa-solid fa-timeline mr-2"></i> Gantt & Schedule
                         </button>
-                        <button onclick="switchTab('graph')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${activeTab === 'graph' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                        <button onclick="switchTab('graph')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all shrink-0 ${activeTab === 'graph' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
                             <i class="fa-solid fa-circle-nodes mr-2"></i> Dependency Graph
                         </button>
-                        <button onclick="switchTab('predictions')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${activeTab === 'predictions' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                        <button onclick="switchTab('predictions')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all shrink-0 ${activeTab === 'predictions' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
                             <i class="fa-solid fa-brain mr-2"></i> ML Prediction Details
+                        </button>
+                        <button onclick="switchTab('comments')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all shrink-0 ${activeTab === 'comments' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                            <i class="fa-solid fa-comments mr-2"></i> Comments & Discussion
+                        </button>
+                        <button onclick="switchTab('documents')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all shrink-0 ${activeTab === 'documents' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                            <i class="fa-solid fa-folder-open mr-2"></i> Document Library
+                        </button>
+                        <button onclick="switchTab('access')" class="py-2.5 px-1 text-xs font-bold uppercase tracking-wider border-b-2 transition-all shrink-0 ${activeTab === 'access' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}">
+                            <i class="fa-solid fa-user-shield mr-2"></i> Access Control
                         </button>
                     </div>
 
@@ -1590,7 +2530,11 @@ feedback_loops: wizardLoops
                         ${activeTab === 'activities' ? renderActivitiesTab() : 
                           activeTab === 'kanban' ? renderKanbanTab() :
                           activeTab === 'gantt' ? renderGanttTab() : 
-                          activeTab === 'graph' ? renderDependencyGraphTab() : renderPredictionsTab()}
+                          activeTab === 'graph' ? renderDependencyGraphTab() : 
+                          activeTab === 'predictions' ? renderPredictionsTab() : 
+                          activeTab === 'comments' ? renderCommentsTab() :
+                          activeTab === 'documents' ? renderDocumentsTab() :
+                          renderAccessControlTab()}
                     </div>
                 </div>
             `;
@@ -1645,9 +2589,28 @@ feedback_loops: wizardLoops
             `;
         }
 
+        function renderCommentsTab() {
+            return `<div id="collab-comments-tab-content" class="py-6">Loading comments...</div>`;
+        }
+
+        function renderDocumentsTab() {
+            return `<div id="collab-documents-tab-content" class="py-6">Loading documents...</div>`;
+        }
+
+        function renderAccessControlTab() {
+            return `<div id="collab-access-tab-content" class="py-6">Loading access controls...</div>`;
+        }
+
         function switchTab(tab) {
             activeTab = tab;
             render();
+            if (tab === 'comments') {
+                collab.fetchComments();
+            } else if (tab === 'documents') {
+                collab.fetchDocuments();
+            } else if (tab === 'access') {
+                collab.fetchCollaborators();
+            }
         }
 
         async function handleKanbanDrop(event, newStatus) {
@@ -1657,12 +2620,10 @@ feedback_loops: wizardLoops
             const act = store.currentActivities.find(a => a.id === id);
             if (act && act.current_status !== newStatus) {
                 try {
-                    await apiRequest(`/api/projects/${store.currentProjectId}/activities/${id}`, 'PUT', {
+                    await updateActivityDetails(id, {
                         current_status: newStatus,
                         change_reason: `Status changed to ${newStatus} via Kanban board`
                     });
-                    showToast(`Task status updated to ${newStatus}`, "success");
-                    loadProjectWorkspace(store.currentProjectId);
                 } catch(e) {
                     showToast("Failed to update status: " + e.message, "error");
                 }
@@ -2781,12 +3742,12 @@ feedback_loops: wizardLoops
             render();
         }
 
-        // Initialize application
         function initApp() {
             // Read initial sidebar state
             store.sidebarCollapsed = localStorage.getItem('pmis_sidebar_collapsed') === 'true';
             
             if (store.token) {
+                collab.init();
                 if (store.user.role === 'Admin' && store.user.is_first_login) {
                     navigate('template-builder');
                 } else {
