@@ -78,7 +78,11 @@ def health_check():
 
 
 # Mount static files at root (must be mounted last to avoid shadowing api routes)
-static_dir = Path(__file__).resolve().parent / "static"
+import sys
+if getattr(sys, 'frozen', False):
+    static_dir = Path(sys.executable).resolve().parent / "static"
+else:
+    static_dir = Path(__file__).resolve().parent / "static"
 static_dir.mkdir(exist_ok=True)
 app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
 

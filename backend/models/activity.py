@@ -99,3 +99,24 @@ class ActivityChangeLog(Base):
 
     def __repr__(self):
         return f"<ActivityChangeLog(activity_id={self.activity_id}, field='{self.field_changed}')>"
+
+
+class ActivityDependency(Base):
+    """Represents a workflow dependency connection, which can be normal or cyclic/feedback loop."""
+    __tablename__ = "activity_dependencies"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    template_id = Column(Integer, ForeignKey("project_templates.id", ondelete="CASCADE"), nullable=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    source_activity = Column(String(100), nullable=False)
+    destination_activity = Column(String(100), nullable=False)
+    dependency_type = Column(String(50), default="Normal")  # "Normal" or "Loop"
+    loop_flag = Column(Boolean, default=False)
+    loop_configuration = Column(JSON, default=dict, nullable=True)
+    # Configuration keys: maxIterations, expectedAvgIterations, exitCondition, loopProbability, isMandatory
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    def __repr__(self):
+        return f"<ActivityDependency(id={self.id}, type='{self.dependency_type}', source='{self.source_activity}', dest='{self.destination_activity}')>"
+

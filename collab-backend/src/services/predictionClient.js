@@ -59,6 +59,7 @@ export const runMLPrediction = async (projectId) => {
       vendor_rating: vendorRating,
       overall_progress_pct: project.overallProgress || 0.0,
       snapshot_date: new Date().toISOString().split('T')[0],
+      feedback_loops: project.feedbackLoops || [],
       activities: formattedActivities
     };
 

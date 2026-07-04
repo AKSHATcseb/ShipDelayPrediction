@@ -290,6 +290,7 @@ const getProjectStateJson = async (projectId) => {
     predicted_delay_pct: project.predictedDelayPct || 0.0,
     predicted_delay_months: project.predictedDelayMonths || 0.0,
     prediction_confidence: project.predictionConfidence || 85.0,
+    feedback_loops: project.feedbackLoops || [],
     activities: formattedActivities
   };
 };

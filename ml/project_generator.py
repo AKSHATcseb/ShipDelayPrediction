@@ -109,4 +109,146 @@ class ProjectGenerator:
                 "remarks": ""
             })
 
+        # Generate loops/rework cycles for project instances
+        project_instance["feedback_loops"] = self._generate_loops(project_instance["activities"])
+
         return project_instance
+
+    def _generate_loops(self, activities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        loops = []
+        num_acts = len(activities)
+        if num_acts < 5:
+            return loops
+
+        roll = self.rng.random()
+        
+        # If we have very few activities, only support Single Loop or No Loop
+        if num_acts < 12:
+            if roll < 0.30:
+                return loops
+            else:
+                # Single Loop
+                dest_idx = int(self.rng.integers(1, max(2, num_acts // 2)))
+                src_idx = int(self.rng.integers(max(2, num_acts // 2) + 1, num_acts - 1))
+                dest_seq = activities[dest_idx]["sequence_number"]
+                src_seq = activities[src_idx]["sequence_number"]
+                
+                loop_type = self.rng.choice(["QA Correction Loop", "Rework Loop", "Review Loop", "Engineering Approval Loop"])
+                loops.append({
+                    "sourceActivity": str(src_seq),
+                    "destinationActivity": str(dest_seq),
+                    "dependencyType": "Loop",
+                    "loopFlag": True,
+                    "loopConfiguration": {
+                        "maxIterations": int(self.rng.integers(2, 5)),
+                        "expectedAvgIterations": float(self.rng.triangular(1.0, 1.5, 2.5)),
+                        "exitCondition": loop_type + " Completed",
+                        "loopProbability": float(self.rng.uniform(0.15, 0.40)),
+                        "isMandatory": bool(self.rng.random() < 0.3)
+                    }
+                })
+                return loops
+
+        # Full procedural generation for larger projects (num_acts >= 12)
+        # 25% chance of No Loop
+        if roll < 0.25:
+            return loops
+        
+        # 35% chance of Single Loop
+        elif roll < 0.60:
+            dest_idx = int(self.rng.integers(1, num_acts // 2))
+            src_idx = int(self.rng.integers(num_acts // 2 + 1, num_acts - 1))
+            dest_seq = activities[dest_idx]["sequence_number"]
+            src_seq = activities[src_idx]["sequence_number"]
+            
+            loop_type = self.rng.choice(["QA Correction Loop", "Rework Loop", "Review Loop", "Engineering Approval Loop"])
+            loops.append({
+                "sourceActivity": str(src_seq),
+                "destinationActivity": str(dest_seq),
+                "dependencyType": "Loop",
+                "loopFlag": True,
+                "loopConfiguration": {
+                    "maxIterations": int(self.rng.integers(2, 5)),
+                    "expectedAvgIterations": float(self.rng.triangular(1.0, 1.5, 2.5)),
+                    "exitCondition": loop_type + " Completed",
+                    "loopProbability": float(self.rng.uniform(0.15, 0.40)),
+                    "isMandatory": bool(self.rng.random() < 0.3)
+                }
+            })
+            
+        # 25% chance of Multiple Independent Loops
+        elif roll < 0.85:
+            # Loop 1: early in the project
+            dest1_idx = int(self.rng.integers(1, 3))
+            src1_idx = int(self.rng.integers(3, 6))
+            dest1_seq = activities[dest1_idx]["sequence_number"]
+            src1_seq = activities[src1_idx]["sequence_number"]
+            
+            # Loop 2: later in the project
+            dest2_idx = int(self.rng.integers(6, 9))
+            src2_idx = int(self.rng.integers(9, num_acts - 1))
+            dest2_seq = activities[dest2_idx]["sequence_number"]
+            src2_seq = activities[src2_idx]["sequence_number"]
+            
+            loops.append({
+                "sourceActivity": str(src1_seq),
+                "destinationActivity": str(dest1_seq),
+                "dependencyType": "Loop",
+                "loopFlag": True,
+                "loopConfiguration": {
+                    "maxIterations": 3,
+                    "expectedAvgIterations": 1.5,
+                    "exitCondition": "Engineering Approval Loop Passed",
+                    "loopProbability": 0.25,
+                    "isMandatory": False
+                }
+            })
+            loops.append({
+                "sourceActivity": str(src2_seq),
+                "destinationActivity": str(dest2_seq),
+                "dependencyType": "Loop",
+                "loopFlag": True,
+                "loopConfiguration": {
+                    "maxIterations": 4,
+                    "expectedAvgIterations": 2.0,
+                    "exitCondition": "Testing Loop Approved",
+                    "loopProbability": 0.35,
+                    "isMandatory": True
+                }
+            })
+            
+        # 15% chance of Nested Loop
+        else:
+            dest_outer = activities[1]["sequence_number"]
+            src_outer = activities[num_acts - 2]["sequence_number"]
+            dest_inner = activities[3]["sequence_number"]
+            src_inner = activities[num_acts - 4]["sequence_number"]
+            
+            loops.append({
+                "sourceActivity": str(src_outer),
+                "destinationActivity": str(dest_outer),
+                "dependencyType": "Loop",
+                "loopFlag": True,
+                "loopConfiguration": {
+                    "maxIterations": 3,
+                    "expectedAvgIterations": 1.8,
+                    "exitCondition": "Review Loop Final Signoff",
+                    "loopProbability": 0.25,
+                    "isMandatory": False
+                }
+            })
+            loops.append({
+                "sourceActivity": str(src_inner),
+                "destinationActivity": str(dest_inner),
+                "dependencyType": "Loop",
+                "loopFlag": True,
+                "loopConfiguration": {
+                    "maxIterations": 4,
+                    "expectedAvgIterations": 2.0,
+                    "exitCondition": "QA Correction Loop Pass",
+                    "loopProbability": 0.35,
+                    "isMandatory": True
+                }
+            })
+            
+        return loops

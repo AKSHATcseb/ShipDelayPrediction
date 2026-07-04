@@ -8,7 +8,7 @@ const router = express.Router();
 
 // All userRoutes are strictly Project Manager-only
 router.use(protect);
-router.use(requireRole('PROJECT_MANAGER'));
+router.use(requireRole('PROJECT_MANAGER', 'ADMIN'));
 
 router.get('/', getUsers);
 router.post('/', createUser);

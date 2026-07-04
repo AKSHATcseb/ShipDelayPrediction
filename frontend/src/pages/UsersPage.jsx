@@ -181,6 +181,7 @@ function UsersPage() {
             <option value="All">All Roles</option>
             <option value="PROJECT_MANAGER">Project Managers</option>
             <option value="VIEWER">Viewers</option>
+            <option value="ADMIN">User Administrators</option>
           </select>
         </div>
       </div>
@@ -216,11 +217,13 @@ function UsersPage() {
                   <td className="p-4 text-slate-500 font-semibold">{u.email}</td>
                   <td className="p-4">
                     <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider border ${
-                      u.role === 'PROJECT_MANAGER' 
-                        ? 'bg-[#D97706]/10 text-[#D97706] border-[#D97706]/20' 
-                        : 'bg-[#2F6690]/10 text-[#2F6690] border-[#2F6690]/20'
+                      u.role === 'ADMIN' 
+                        ? 'bg-purple-100 text-purple-800 border-purple-200' 
+                        : (u.role === 'PROJECT_MANAGER'
+                           ? 'bg-[#D97706]/10 text-[#D97706] border-[#D97706]/20' 
+                           : 'bg-[#2F6690]/10 text-[#2F6690] border-[#2F6690]/20')
                     }`}>
-                      {u.role === 'PROJECT_MANAGER' ? 'Project Manager' : 'Viewer'}
+                      {u.role === 'ADMIN' ? 'User Admin' : (u.role === 'PROJECT_MANAGER' ? 'Project Manager' : 'Viewer')}
                     </span>
                   </td>
                   <td className="p-4">
@@ -333,6 +336,7 @@ function UsersPage() {
                 >
                   <option value="PROJECT_MANAGER">Project Manager</option>
                   <option value="VIEWER">Viewer (Read-Only Observer)</option>
+                  <option value="ADMIN">User Administrator</option>
                 </select>
               </div>
               <div className="flex justify-end gap-3 pt-4 border-t border-[#D6DEE8]">
@@ -393,6 +397,7 @@ function UsersPage() {
                 >
                   <option value="PROJECT_MANAGER">Project Manager</option>
                   <option value="VIEWER">Viewer (Read-Only)</option>
+                  <option value="ADMIN">User Administrator</option>
                 </select>
               </div>
               <div>

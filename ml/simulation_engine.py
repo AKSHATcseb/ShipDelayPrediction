@@ -53,6 +53,52 @@ class SimulationEngine:
         actual_durations = [0] * num_activities
         remaining_days = [0] * num_activities
 
+        # Precompute loop cycle nodes and configurations for execution simulation
+        loops = sim_project.get("feedback_loops", sim_project.get("feedbackLoops", []))
+        seq_to_idx = {act["sequence_number"]: i for i, act in enumerate(sim_project["activities"])}
+        
+        adj = {i: [] for i in range(num_activities)}
+        for i_idx, act in enumerate(sim_project["activities"]):
+            for dep in act.get("dependency_list", []):
+                if 0 <= dep < num_activities:
+                    adj[dep].append(i_idx)
+                    
+        adj_rev = {i: [] for i in range(num_activities)}
+        for node, neighbors in adj.items():
+            for neighbor in neighbors:
+                adj_rev[neighbor].append(node)
+                
+        def get_reachable(start_node, adj_dict):
+            visited = set()
+            stack = [start_node]
+            while stack:
+                node = stack.pop()
+                if node not in visited:
+                    visited.add(node)
+                    for neighbor in adj_dict.get(node, []):
+                        if neighbor not in visited:
+                            stack.append(neighbor)
+            return visited
+
+        cycle_sets = []
+        for l in loops:
+            try:
+                src_seq = int(l.get("sourceActivity", l.get("source_activity", 0)))
+                dest_seq = int(l.get("destinationActivity", l.get("destination_activity", 0)))
+            except (ValueError, TypeError):
+                cycle_sets.append(set())
+                continue
+            if src_seq in seq_to_idx and dest_seq in seq_to_idx:
+                u = seq_to_idx[src_seq]
+                v = seq_to_idx[dest_seq]
+                r_from_v = get_reachable(v, adj)
+                r_to_u = get_reachable(u, adj_rev)
+                cycle_sets.append((r_from_v & r_to_u) | {u, v})
+            else:
+                cycle_sets.append(set())
+
+        loop_iterations = [0] * len(loops)
+
         # Day counter
         current_day = 0
         project_completed = False
@@ -103,6 +149,31 @@ class SimulationEngine:
                         statuses[idx] = 2  # Completed
                         actual_ends[idx] = current_date
                         completion_pcts[idx] = 100.0
+
+                        # Process loops/rework feedback cycles
+                        act_seq = sim_project["activities"][idx]["sequence_number"]
+                        for l_idx, l in enumerate(loops):
+                            try:
+                                src_seq = int(l.get("sourceActivity", l.get("source_activity", 0)))
+                                dest_seq = int(l.get("destinationActivity", l.get("destination_activity", 0)))
+                            except (ValueError, TypeError):
+                                continue
+                                
+                            if src_seq == act_seq:
+                                config = l.get("loopConfiguration", l.get("loop_configuration", {}))
+                                avg_iter = config.get("expectedAvgIterations", config.get("expected_avg_iterations", 2))
+                                current_iter = loop_iterations[l_idx]
+                                if current_iter < avg_iter:
+                                    loop_iterations[l_idx] += 1
+                                    c_nodes = cycle_sets[l_idx]
+                                    # Reset status and progress for activities in cycle
+                                    for c_idx in c_nodes:
+                                        statuses[c_idx] = 0  # Not Started
+                                        completion_pcts[c_idx] = 0.0
+                                        actual_starts[c_idx] = None
+                                        actual_ends[c_idx] = None
+                                        remarks[c_idx] = f"[Rework Iteration {loop_iterations[l_idx]}] Re-started due to loop feedback."
+
 
             # Calculate overall project progress % weighted by planned duration
             total_planned_dur = sum(durations)
@@ -176,7 +247,7 @@ class SimulationEngine:
             final_project["activities"].append(final_act)
 
         # Compute actual total delay in months
-        actual_end = max(actual_ends)
+        actual_end = max([d for d in actual_ends if d is not None] or [current_date])
         planned_end = max(act["planned_end_date"] for act in sim_project["activities"])
         
         delay_days = max(0, (actual_end - planned_end).days)
@@ -190,10 +261,23 @@ class SimulationEngine:
         final_project["delay_months"] = delay_months
         final_project["delay_percentage"] = delay_pct
 
+        # Attach loop metrics for generator reporting/audit
+        all_cycle_nodes = set()
+        for c in cycle_sets:
+            all_cycle_nodes.update(c)
+        final_project["loop_count"] = len(loops)
+        final_project["loop_length"] = float(np.mean([len(c) for c in cycle_sets])) if cycle_sets else 0.0
+        final_project["loop_delay"] = delay_months
+        final_project["iteration_count"] = sum(loop_iterations)
+        final_project["activities_in_loop"] = len(all_cycle_nodes)
+        final_project["loop_type"] = loops[0].get("loopConfiguration", {}).get("exitCondition", "Rework") if loops else "None"
+
         # Map targets onto snapshots
         for snap in snapshots:
             snap["target_delay_percentage"] = delay_pct
             snap["target_delay_months"] = delay_months
             snap["target_actual_end_date"] = actual_end
+            # Copy feedback loops to snapshots so feature extractor can access them
+            snap["feedback_loops"] = loops
 
         return snapshots, final_project

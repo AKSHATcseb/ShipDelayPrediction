@@ -9,7 +9,8 @@ import ActivityModal from '../components/ActivityModal.jsx';
 import GanttChart from '../components/GanttChart.jsx';
 import CommentsSection from '../components/CommentsSection.jsx';
 import DocumentManager from '../components/DocumentManager.jsx';
-import { ArrowLeft, Users, Calendar, FolderKanban, MessageSquare, FileText, Shield, UserPlus, Table } from 'lucide-react';
+import WorkflowCanvas from '../components/WorkflowCanvas.jsx';
+import { ArrowLeft, Users, Calendar, FolderKanban, MessageSquare, FileText, Shield, UserPlus, Table, GitFork } from 'lucide-react';
 
 function ProjectWorkspace({ projectId, onBack }) {
   const [project, setProject] = useState(null);
@@ -87,6 +88,27 @@ function ProjectWorkspace({ projectId, onBack }) {
   useEffect(() => {
     fetchProjectDetails();
   }, [projectId]);
+
+  const [workflowData, setWorkflowData] = useState(null);
+  const [loadingWorkflow, setLoadingWorkflow] = useState(false);
+
+  const fetchProjectWorkflow = async () => {
+    setLoadingWorkflow(true);
+    try {
+      const res = await api.get(`/projects/${projectId}/workflow`);
+      setWorkflowData(res.data);
+    } catch (err) {
+      console.error('Failed to load project workflow graph', err);
+    } finally {
+      setLoadingWorkflow(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'workflow') {
+      fetchProjectWorkflow();
+    }
+  }, [activeTab, projectId]);
 
   // WebSocket listeners
   useEffect(() => {
@@ -257,6 +279,13 @@ function ProjectWorkspace({ projectId, onBack }) {
           Gantt & Schedule
         </button>
         <button 
+          onClick={() => setActiveTab('workflow')}
+          className={`px-4 py-2 text-xs font-bold transition-all border-b-2 flex items-center gap-1.5 -mb-[1px] ${activeTab === 'workflow' ? 'border-[#12355B] text-[#12355B]' : 'border-transparent text-slate-500 hover:text-[#2F6690]'}`}
+        >
+          <GitFork size={13} />
+          Workflow Diagram
+        </button>
+        <button 
           onClick={() => setActiveTab('discussion')}
           className={`px-4 py-2 text-xs font-bold transition-all border-b-2 flex items-center gap-1.5 -mb-[1px] ${activeTab === 'discussion' ? 'border-[#12355B] text-[#12355B]' : 'border-transparent text-slate-500 hover:text-[#2F6690]'}`}
         >
@@ -293,6 +322,25 @@ function ProjectWorkspace({ projectId, onBack }) {
 
         {activeTab === 'gantt' && (
           <GanttChart project={project} activities={activities} />
+        )}
+
+        {activeTab === 'workflow' && (
+          <div className="h-full w-full">
+            {loadingWorkflow ? (
+              <div className="flex items-center justify-center h-full text-xs font-bold text-slate-500">
+                Building workflow flowchart nodes and connections...
+              </div>
+            ) : workflowData ? (
+              <WorkflowCanvas
+                nodes={workflowData.nodes}
+                edges={workflowData.edges}
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-xs font-bold text-[#C62828]">
+                Failed to construct workflow graph layout.
+              </div>
+            )}
+          </div>
         )}
 
         {activeTab === 'discussion' && (

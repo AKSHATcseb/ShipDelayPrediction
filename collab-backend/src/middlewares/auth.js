@@ -15,6 +15,9 @@ export const ROLE_PERMISSIONS = {
   ],
   'VIEWER': [
     'project.read', 'report.generate', 'comment.read', 'comment.create', 'file.upload'
+  ],
+  'ADMIN': [
+    'user.read', 'user.create', 'user.delete'
   ]
 };
 

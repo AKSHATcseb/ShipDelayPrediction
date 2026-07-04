@@ -70,39 +70,52 @@ const seedDefaultUsers = async () => {
       await User.create([
         {
           name: 'Akshat (Project Manager)',
-          email: 'admin@navalpmis.gov',
-          password: 'password123',
+          email: 'akshat@gov.in',
+          password: '12345678',
           globalRole: 'PROJECT_MANAGER',
           role: 'PROJECT_MANAGER'
         },
         {
           name: 'Brijesh (Project Manager)',
-          email: 'pm@navalpmis.gov',
-          password: 'password123',
+          email: 'brijesh@gov.in',
+          password: '12345678',
           globalRole: 'PROJECT_MANAGER',
           role: 'PROJECT_MANAGER'
         },
         {
           name: 'Vishank (Viewer)',
-          email: 'engineer@navalpmis.gov',
-          password: 'password123',
+          email: 'vishank@gov.in',
+          password: '12345678',
           globalRole: 'VIEWER',
           role: 'VIEWER'
         },
         {
           name: 'Mradul (Viewer)',
-          email: 'viewer@navalpmis.gov',
-          password: 'password123',
+          email: 'mradul@gov.in',
+          password: '12345678',
           globalRole: 'VIEWER',
           role: 'VIEWER'
         }
       ]);
-      console.log('Default accounts seeded: admin@navalpmis.gov, pm@navalpmis.gov, engineer@navalpmis.gov, viewer@navalpmis.gov (password: password123)');
+      console.log('Default accounts seeded: akshat@gov.in, brijesh@gov.in, vishank@gov.in, mradul@gov.in (password: 12345678)');
     }
 
-    const adminUser = await User.findOne({ email: 'admin@navalpmis.gov' });
-    if (adminUser) {
-      await seedDefaultTemplates(adminUser._id);
+    const adminRoleCount = await User.countDocuments({ role: 'ADMIN' });
+    if (adminRoleCount === 0) {
+      console.log('Seeding default User Administrator account...');
+      await User.create({
+        name: 'System Admin',
+        email: 'useradmin@gov.in',
+        password: '12345678',
+        globalRole: 'ADMIN',
+        role: 'ADMIN'
+      });
+      console.log('Default User Administrator account seeded: useradmin@gov.in (password: 12345678)');
+    }
+
+    const pmUser = await User.findOne({ email: 'akshat@gov.in' });
+    if (pmUser) {
+      await seedDefaultTemplates(pmUser._id);
     }
 
     // Default project seeding disabled

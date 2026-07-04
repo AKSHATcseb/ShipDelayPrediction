@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import api from '../utils/api.js';
-import { LayoutGrid, Plus, Trash2, Edit3, ClipboardList, CheckCircle2, AlertTriangle, Copy, ShieldAlert } from 'lucide-react';
+import { LayoutGrid, Plus, Trash2, Edit3, ClipboardList, CheckCircle2, AlertTriangle, Copy, ShieldAlert, GitFork } from 'lucide-react';
+import WorkflowCanvas from '../components/WorkflowCanvas.jsx';
 
 function TemplatesPage() {
   const [templates, setTemplates] = useState([]);
@@ -12,6 +13,11 @@ function TemplatesPage() {
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
 
+  // Workflow visualizer states
+  const [showWorkflowModal, setShowWorkflowModal] = useState(false);
+  const [workflowData, setWorkflowData] = useState(null);
+  const [loadingWorkflow, setLoadingWorkflow] = useState(false);
+
   // Form states
   const [templateName, setTemplateName] = useState('');
   const [templateDesc, setTemplateDesc] = useState('');
@@ -19,9 +25,19 @@ function TemplatesPage() {
   const [activities, setActivities] = useState([
     { name: 'Cabinet Committee Approval (AoN)', category: 'Administrative', sequenceNumber: 1, dependencyList: [], durationMonths: 6, historicalRiskWeight: 35, responsibleDepartment: 'Cabinet Committee', isMilestone: true, isCriticalPath: true }
   ]);
+  const [feedbackLoops, setFeedbackLoops] = useState([]);
   const [duplicateNewName, setDuplicateNewName] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+
+  // Loop Creator Form states
+  const [newLoopSrc, setNewLoopSrc] = useState('');
+  const [newLoopDest, setNewLoopDest] = useState('');
+  const [newLoopMaxIter, setNewLoopMaxIter] = useState(5);
+  const [newLoopAvgIter, setNewLoopAvgIter] = useState(2);
+  const [newLoopProb, setNewLoopProb] = useState(0.3);
+  const [newLoopCond, setNewLoopCond] = useState('QA Approved');
+  const [newLoopMandatory, setNewLoopMandatory] = useState(false);
 
   const categories = ['Administrative', 'Design & Engineering', 'Procurement', 'Construction', 'Trials & Commissioning', 'Other'];
 
@@ -105,7 +121,8 @@ function TemplatesPage() {
           name: templateName,
           description: templateDesc,
           shipType,
-          activities
+          activities,
+          feedbackLoops
         });
         setSuccess('Template blueprint updated successfully!');
         setSelectedTemplate(res.data);
@@ -114,7 +131,8 @@ function TemplatesPage() {
           name: templateName,
           description: templateDesc,
           shipType,
-          activities
+          activities,
+          feedbackLoops
         });
         setSuccess('Template blueprint created successfully!');
         setSelectedTemplate(res.data);
@@ -162,6 +180,74 @@ function TemplatesPage() {
     }
   };
 
+  const handleViewWorkflow = async () => {
+    if (!selectedTemplate) return;
+    setLoadingWorkflow(true);
+    setError('');
+    try {
+      const res = await api.get(`/templates/${selectedTemplate._id}/workflow`);
+      setWorkflowData(res.data);
+      setShowWorkflowModal(true);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to load workflow data.');
+    } finally {
+      setLoadingWorkflow(false);
+    }
+  };
+
+  const handleAddLoop = (e) => {
+    e.preventDefault();
+    if (!newLoopSrc || !newLoopDest) {
+      alert('Please specify both source and destination activities.');
+      return;
+    }
+    if (newLoopSrc === newLoopDest) {
+      alert('Self-loops are not allowed.');
+      return;
+    }
+    
+    const srcSeq = parseInt(newLoopSrc);
+    const destSeq = parseInt(newLoopDest);
+    
+    if (srcSeq < destSeq) {
+      alert('Warning: Loops must flow backward from a later stage to an earlier stage.');
+      return;
+    }
+    
+    const duplicate = feedbackLoops.some(
+      l => l.sourceActivity === newLoopSrc && l.destinationActivity === newLoopDest
+    );
+    if (duplicate) {
+      alert('This feedback loop connection already exists.');
+      return;
+    }
+    
+    const newLoop = {
+      sourceActivity: newLoopSrc,
+      destinationActivity: newLoopDest,
+      dependencyType: 'Loop',
+      loopFlag: true,
+      loopConfiguration: {
+        maxIterations: parseInt(newLoopMaxIter) || 5,
+        expectedAvgIterations: parseFloat(newLoopAvgIter) || 2,
+        isMandatory: !!newLoopMandatory
+      }
+    };
+    
+    setFeedbackLoops([...feedbackLoops, newLoop]);
+    
+    setNewLoopSrc('');
+    setNewLoopDest('');
+    setNewLoopMaxIter(5);
+    setNewLoopAvgIter(2);
+    setNewLoopMandatory(false);
+  };
+
+  const handleRemoveLoop = (index) => {
+    const updated = feedbackLoops.filter((_, i) => i !== index);
+    setFeedbackLoops(updated);
+  };
+
   const resetForm = () => {
     setTemplateName('');
     setTemplateDesc('');
@@ -169,6 +255,7 @@ function TemplatesPage() {
     setActivities([
       { name: 'Cabinet Committee Approval (AoN)', category: 'Administrative', sequenceNumber: 1, dependencyList: [], durationMonths: 6, historicalRiskWeight: 35, responsibleDepartment: 'Cabinet Committee', isMilestone: true, isCriticalPath: true }
     ]);
+    setFeedbackLoops([]);
     setIsEditMode(false);
   };
 
@@ -263,13 +350,23 @@ function TemplatesPage() {
                   <h3 className="text-sm font-black text-[#12355B] font-outfit uppercase">{selectedTemplate.name}</h3>
                   <p className="text-xs text-slate-550 mt-1 leading-relaxed">{selectedTemplate.description || 'No blueprint description configured.'}</p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleViewWorkflow}
+                    disabled={loadingWorkflow}
+                    className="px-3 py-2 bg-[#2F6690] hover:bg-[#1B4B6E] text-white text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 shadow-sm"
+                    title="View Workflow Graph"
+                  >
+                    <GitFork size={12} className="stroke-[2.5]" />
+                    {loadingWorkflow ? 'Loading...' : 'View Workflow'}
+                  </button>
                   <button 
                     onClick={() => {
                       setTemplateName(selectedTemplate.name);
                       setTemplateDesc(selectedTemplate.description || '');
                       setShipType(selectedTemplate.shipType || 'Submarine');
                       setActivities(selectedTemplate.activities.map(({ _id, ...rest }) => rest));
+                      setFeedbackLoops(selectedTemplate.feedbackLoops || []);
                       setIsEditMode(true);
                       setShowCreateModal(true);
                     }}
@@ -541,6 +638,128 @@ function TemplatesPage() {
                     </table>
                   </div>
                 </div>
+
+                {/* Feedback Loops Configuration */}
+                <div className="space-y-4 border-t border-[#D6DEE8] pt-4 mt-6">
+                  <div className="flex justify-between items-center pb-2">
+                    <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                      <GitFork size={12} className="text-[#FF5722]" />
+                      Feedback Loops / Rework Cycles
+                    </h4>
+                  </div>
+
+                  {/* Add Loop Form */}
+                  <div className="bg-[#F7F9FC] border border-[#D6DEE8] p-4 rounded-xl space-y-3.5">
+                    <p className="text-[10px] font-extrabold text-[#12355B] uppercase tracking-wider">Configure New Rework Loop Connection</p>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 items-end">
+                      <div>
+                        <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Source (Later Stage)</label>
+                        <select
+                          value={newLoopSrc}
+                          onChange={(e) => setNewLoopSrc(e.target.value)}
+                          className="mt-1 block w-full px-2 py-1.5 bg-white border border-[#D6DEE8] rounded text-[11px] text-slate-800 focus:outline-none"
+                        >
+                          <option value="">Select source</option>
+                          {activities.map((a) => (
+                            <option key={a.sequenceNumber} value={a.sequenceNumber}>
+                              #{a.sequenceNumber} - {a.name.substring(0, 20)}...
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Dest (Earlier Stage)</label>
+                        <select
+                          value={newLoopDest}
+                          onChange={(e) => setNewLoopDest(e.target.value)}
+                          className="mt-1 block w-full px-2 py-1.5 bg-white border border-[#D6DEE8] rounded text-[11px] text-slate-800 focus:outline-none"
+                        >
+                          <option value="">Select destination</option>
+                          {activities.map((a) => (
+                            <option key={a.sequenceNumber} value={a.sequenceNumber}>
+                              #{a.sequenceNumber} - {a.name.substring(0, 20)}...
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Max Iterations</label>
+                        <input
+                          type="number"
+                          value={newLoopMaxIter}
+                          onChange={(e) => setNewLoopMaxIter(e.target.value)}
+                          className="mt-1 block w-full px-2 py-1 bg-white border border-[#D6DEE8] rounded text-[11px] text-center"
+                          min="1"
+                          max="10"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Avg Iterations</label>
+                        <input
+                          type="number"
+                          value={newLoopAvgIter}
+                          onChange={(e) => setNewLoopAvgIter(e.target.value)}
+                          className="mt-1 block w-full px-2 py-1 bg-white border border-[#D6DEE8] rounded text-[11px] text-center"
+                          min="1"
+                          step="0.5"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-2 pb-1 bg-white md:bg-transparent p-2 md:p-0 rounded border md:border-0 border-[#D6DEE8]">
+                        <input
+                          type="checkbox"
+                          id="newLoopMandatory"
+                          checked={newLoopMandatory}
+                          onChange={(e) => setNewLoopMandatory(e.target.checked)}
+                          className="h-3.5 w-3.5 accent-[#FF5722] bg-slate-50 border-[#D6DEE8] rounded"
+                        />
+                        <label htmlFor="newLoopMandatory" className="text-[9px] font-bold text-slate-500 uppercase tracking-wider cursor-pointer font-outfit">Mandatory</label>
+                      </div>
+                    </div>
+                    
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={handleAddLoop}
+                        className="px-3.5 py-1.5 bg-[#FF5722] hover:bg-[#E64A19] text-white text-[10px] font-extrabold uppercase rounded-lg transition-all shadow-sm"
+                      >
+                        Add Loop Dependency
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Active Loops List */}
+                  {feedbackLoops.length === 0 ? (
+                    <p className="text-[10px] text-slate-400 italic py-2">No rework loops configured for this template.</p>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                      {feedbackLoops.map((loop, idx) => (
+                        <div key={idx} className="p-3 border border-[#D6DEE8] bg-white rounded-xl flex items-center justify-between shadow-sm relative overflow-hidden group">
+                          <div className="absolute top-0 left-0 bottom-0 w-1 bg-[#FF5722]"></div>
+                          <div className="pl-2.5">
+                            <p className="text-[11px] font-bold text-[#12355B]">
+                              Stage #{loop.sourceActivity} ↺ Stage #{loop.destinationActivity}
+                            </p>
+                            <p className="text-[9px] text-slate-500 mt-1 font-semibold">
+                              Max Iterations: <strong>{loop.loopConfiguration.maxIterations}</strong> | Expected Avg: <strong>{loop.loopConfiguration.expectedAvgIterations}</strong>
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveLoop(idx)}
+                            className="p-1 text-slate-400 hover:text-[#C62828] hover:bg-red-50 rounded transition-all"
+                            title="Remove Loop"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Modal Footer */}
@@ -599,6 +818,19 @@ function TemplatesPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* WORKFLOW CANVAS VISUALIZER MODAL */}
+      {showWorkflowModal && workflowData && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-[#D6DEE8] w-full max-w-6xl h-[80vh] rounded-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150 flex flex-col">
+            <WorkflowCanvas
+              nodes={workflowData.nodes}
+              edges={workflowData.edges}
+              onClose={() => setShowWorkflowModal(false)}
+            />
           </div>
         </div>
       )}

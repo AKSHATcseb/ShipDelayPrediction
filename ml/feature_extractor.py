@@ -119,6 +119,118 @@ class FeatureExtractor:
 
         open_risks = delayed + blocked + qa_issues
 
+        # Extract loop connections
+        loops = snapshot.get("feedback_loops", snapshot.get("feedbackLoops", []))
+        
+        # Build normal dependency graph: u -> v if v depends on u
+        n = len(activities)
+        seq_to_idx = {act.get("sequence_number", act.get("sequenceNumber", 0)): i for i, act in enumerate(activities)}
+        
+        adj = {i: [] for i in range(n)}
+        for idx, act in enumerate(activities):
+            deps = act.get("dependency_list", act.get("dependencyList", []))
+            for dep in deps:
+                if isinstance(dep, int) and 0 <= dep < n:
+                    adj[dep].append(idx)
+        
+        # Reversed adjacency list for reachability to u
+        adj_rev = {i: [] for i in range(n)}
+        for node, neighbors in adj.items():
+            for neighbor in neighbors:
+                adj_rev[neighbor].append(node)
+                
+        def get_reachable(start_node, adj_dict):
+            visited = set()
+            stack = [start_node]
+            while stack:
+                node = stack.pop()
+                if node not in visited:
+                    visited.add(node)
+                    for neighbor in adj_dict.get(node, []):
+                        if neighbor not in visited:
+                            stack.append(neighbor)
+            return visited
+
+        cycle_sets = []
+        loop_iteration_limits = []
+        expected_avg_iterations_list = []
+        loop_probabilities = []
+        
+        for l in loops:
+            try:
+                src_seq = int(l.get("sourceActivity", l.get("source_activity", 0)))
+                dest_seq = int(l.get("destinationActivity", l.get("destination_activity", 0)))
+            except (ValueError, TypeError):
+                continue
+                
+            if src_seq not in seq_to_idx or dest_seq not in seq_to_idx:
+                continue
+                
+            u = seq_to_idx[src_seq]
+            v = seq_to_idx[dest_seq]
+            
+            # Find cycle nodes
+            r_from_v = get_reachable(v, adj)
+            r_to_u = get_reachable(u, adj_rev)
+            c_nodes = (r_from_v & r_to_u) | {u, v}
+            cycle_sets.append(c_nodes)
+            
+            # Extract config
+            config = l.get("loopConfiguration", l.get("loop_configuration", {}))
+            max_iter = config.get("maxIterations", config.get("max_iterations", 5))
+            avg_iter = config.get("expectedAvgIterations", config.get("expected_avg_iterations", 2))
+            prob = 1.0
+            
+            loop_iteration_limits.append(max_iter)
+            expected_avg_iterations_list.append(avg_iter)
+            loop_probabilities.append(prob)
+
+        # Compute loop features
+        loop_count = len(loops)
+        
+        all_cycle_nodes = set()
+        for c in cycle_sets:
+            all_cycle_nodes.update(c)
+        activities_in_loops = len(all_cycle_nodes)
+        
+        max_loop_depth = max(len(c) for c in cycle_sets) if cycle_sets else 0
+        avg_loop_length = float(np.mean([len(c) for c in cycle_sets])) if cycle_sets else 0.0
+        loop_iteration_limit = max(loop_iteration_limits) if loop_iteration_limits else 0
+        historical_loop_iterations = float(np.mean(expected_avg_iterations_list)) if expected_avg_iterations_list else 0.0
+        
+        # Loop Delay Ratio
+        total_duration_all_acts = sum(act.get("duration_months", act.get("durationMonths", 1.0)) for act in activities)
+        if total_duration_all_acts <= 0:
+            total_duration_all_acts = 1.0
+            
+        loop_expected_delays = 0.0
+        for idx, c_nodes in enumerate(cycle_sets):
+            prob = loop_probabilities[idx]
+            avg_iter = expected_avg_iterations_list[idx]
+            cycle_dur = sum(activities[i].get("duration_months", activities[i].get("durationMonths", 1.0)) for i in c_nodes)
+            loop_expected_delays += prob * avg_iter * cycle_dur
+            
+        loop_delay_ratio = float(loop_expected_delays / total_duration_all_acts)
+        loop_completion_efficiency = float(1.0 / (1.0 + historical_loop_iterations)) if loop_count > 0 else 1.0
+        
+        # Critical Loop Presence
+        critical_indices = {i for i, act in enumerate(activities) if act.get("is_critical_path", act.get("isCriticalPath", False))}
+        critical_loop_presence = 1 if (critical_indices & all_cycle_nodes) else 0
+        
+        # Percentage of Critical Path in Loop
+        num_critical = len(critical_indices)
+        critical_in_loop = len(critical_indices & all_cycle_nodes)
+        pct_critical_in_loop = float(critical_in_loop / num_critical * 100.0) if num_critical > 0 else 0.0
+        
+        # Loop Dependency Density
+        num_normal_edges = sum(len(act.get("dependency_list", act.get("dependencyList", []))) for act in activities)
+        num_loop_edges = len(loops)
+        total_edges = num_normal_edges + num_loop_edges
+        loop_dependency_density = float(num_loop_edges / total_edges) if total_edges > 0 else 0.0
+        
+        # Rework Frequency
+        rework_frequency = float(sum(expected_avg_iterations_list))
+
         # Target classification
         delay_pct = snapshot.get("target_delay_percentage", 0.0)
         delay_months = snapshot.get("target_delay_months", 0.0)
@@ -165,6 +277,20 @@ class FeatureExtractor:
             "project_cost": project_cost,
             "planned_duration_months": planned_duration_months,
             
+            # Loop features
+            "loop_count": loop_count,
+            "activities_in_loops": activities_in_loops,
+            "max_loop_depth": max_loop_depth,
+            "avg_loop_length": avg_loop_length,
+            "loop_iteration_limit": loop_iteration_limit,
+            "historical_loop_iterations": historical_loop_iterations,
+            "loop_delay_ratio": loop_delay_ratio,
+            "loop_completion_efficiency": loop_completion_efficiency,
+            "critical_loop_presence": critical_loop_presence,
+            "pct_critical_in_loop": pct_critical_in_loop,
+            "loop_dependency_density": loop_dependency_density,
+            "rework_frequency": rework_frequency,
+            
             # String columns for preprocessor encoding
             "ship_type": snapshot["ship_type"],
             
@@ -175,6 +301,7 @@ class FeatureExtractor:
         }
         
         return features
+
 
     @staticmethod
     def convert_snapshots_to_dataframe(snapshots: List[Dict[str, Any]]) -> pd.DataFrame:

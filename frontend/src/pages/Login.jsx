@@ -22,18 +22,6 @@ function Login() {
     }
   };
 
-  const handleQuickLogin = async (quickEmail) => {
-    setError('');
-    setLoading(true);
-    try {
-      await login(quickEmail, 'password123');
-    } catch (err) {
-      setError(err.message || 'Sandbox login failed.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div className="min-h-screen blueprint-bg flex items-center justify-center px-4 relative overflow-hidden font-sans">
       {/* Engineering accent background lines */}
@@ -67,7 +55,7 @@ function Login() {
               type="email" 
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="e.g. pm@navalpmis.gov"
+              placeholder="e.g. pm@gov.in"
               className="mt-1.5 block w-full px-3.5 py-2.5 bg-[#F7F9FC] border border-[#D6DEE8] hover:border-[#2F6690] focus:border-[#12355B] rounded-lg text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-[#12355B] transition-all font-semibold"
               required
             />
@@ -93,47 +81,6 @@ function Login() {
             {loading ? 'Authenticating Gateway...' : 'Access Portal'}
           </button>
         </form>
-
-        <div className="relative my-6 flex items-center justify-center">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-[#D6DEE8]"></div>
-          </div>
-          <span className="relative bg-white px-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">Sandbox Gateways</span>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2.5">
-          <button 
-            onClick={() => handleQuickLogin('admin@navalpmis.gov')}
-            className="p-2.5 border border-[#D6DEE8] hover:border-[#2F6690] hover:bg-[#E8EFF5]/30 rounded-xl text-left transition-all group"
-          >
-            <p className="text-[10px] font-extrabold text-[#12355B]">Akshat</p>
-            <p className="text-[8px] text-[#D97706] font-bold uppercase tracking-wider mt-0.5 group-hover:translate-x-0.5 transition-transform">Project Manager</p>
-          </button>
-
-          <button 
-            onClick={() => handleQuickLogin('pm@navalpmis.gov')}
-            className="p-2.5 border border-[#D6DEE8] hover:border-[#2F6690] hover:bg-[#E8EFF5]/30 rounded-xl text-left transition-all group"
-          >
-            <p className="text-[10px] font-extrabold text-[#12355B]">Brijesh</p>
-            <p className="text-[8px] text-[#D97706] font-bold uppercase tracking-wider mt-0.5 group-hover:translate-x-0.5 transition-transform">Project Manager</p>
-          </button>
-
-          <button 
-            onClick={() => handleQuickLogin('engineer@navalpmis.gov')}
-            className="p-2.5 border border-[#D6DEE8] hover:border-[#2F6690] hover:bg-[#E8EFF5]/30 rounded-xl text-left transition-all group"
-          >
-            <p className="text-[10px] font-extrabold text-[#12355B]">Vishank</p>
-            <p className="text-[8px] text-[#2F6690] font-bold uppercase tracking-wider mt-0.5 group-hover:translate-x-0.5 transition-transform">Viewer</p>
-          </button>
-
-          <button 
-            onClick={() => handleQuickLogin('viewer@navalpmis.gov')}
-            className="p-2.5 border border-[#D6DEE8] hover:border-[#2F6690] hover:bg-[#E8EFF5]/30 rounded-xl text-left transition-all group"
-          >
-            <p className="text-[10px] font-extrabold text-[#12355B]">Mradul</p>
-            <p className="text-[8px] text-[#2F6690] font-bold uppercase tracking-wider mt-0.5 group-hover:translate-x-0.5 transition-transform">Viewer</p>
-          </button>
-        </div>
       </div>
     </div>
   );

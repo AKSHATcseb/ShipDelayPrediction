@@ -25,7 +25,7 @@ export const register = async (req, res) => {
       name,
       email,
       password,
-      globalRole: role === 'PROJECT_MANAGER' ? 'PROJECT_MANAGER' : 'VIEWER',
+      globalRole: role || 'VIEWER',
       role: role || 'VIEWER'
     });
 

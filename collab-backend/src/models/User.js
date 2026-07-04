@@ -20,12 +20,12 @@ const UserSchema = new mongoose.Schema({
   },
   globalRole: {
     type: String,
-    enum: ['PROJECT_MANAGER', 'VIEWER'],
+    enum: ['PROJECT_MANAGER', 'VIEWER', 'ADMIN'],
     default: 'VIEWER'
   },
   role: {
     type: String,
-    enum: ['PROJECT_MANAGER', 'VIEWER'],
+    enum: ['PROJECT_MANAGER', 'VIEWER', 'ADMIN'],
     default: 'VIEWER'
   },
   status: {

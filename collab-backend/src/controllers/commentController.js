@@ -29,7 +29,7 @@ export const createComment = async (req, res) => {
   try {
     const { projectId, activityId, content, parentId } = req.body;
 
-    // Regex to parse mentions like @Akshat or @admin@navalpmis.gov
+    // Regex to parse mentions like @Akshat or @admin@gov.in
     const mentionRegex = /@([a-zA-Z0-9._-]+)/g;
     const matches = content.match(mentionRegex) || [];
     const mentionNamesOrEmails = matches.map(match => match.substring(1));

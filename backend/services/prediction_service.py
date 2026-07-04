@@ -69,6 +69,7 @@ def construct_project_state(project: Project) -> Dict[str, Any]:
         "vendor_rating": vendor_rating,
         "overall_progress_pct": 0.0, # Will be computed by FeatureExtractor
         "snapshot_date": date.today(),
+        "feedback_loops": project.feedback_loops or [],
         "activities": activities
     }
 

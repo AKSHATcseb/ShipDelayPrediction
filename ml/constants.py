@@ -212,5 +212,18 @@ ML_FEATURE_NAMES = [
     "open_risks",
     "project_cost",
     "planned_duration_months",
+    # Loop-related features
+    "loop_count",
+    "activities_in_loops",
+    "max_loop_depth",
+    "avg_loop_length",
+    "loop_iteration_limit",
+    "historical_loop_iterations",
+    "loop_delay_ratio",
+    "loop_completion_efficiency",
+    "critical_loop_presence",
+    "pct_critical_in_loop",
+    "loop_dependency_density",
+    "rework_frequency",
     "ship_type"
 ]

@@ -26,6 +26,12 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [showNotifications, setShowNotifications] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    if (user && user.role === 'ADMIN') {
+      setCurrentPage('users');
+    }
+  }, [user]);
   
   const [notifications, setNotifications] = useState([]);
   const [toasts, setToasts] = useState([]);
@@ -103,15 +109,16 @@ function App() {
     setCurrentPage(page);
   };
 
-  // Resolve role colors
   const roleColors = {
     PROJECT_MANAGER: 'text-[#D97706] bg-[#D97706]/10 border-[#D97706]/20',
-    VIEWER: 'text-[#2F6690] bg-[#2F6690]/10 border-[#2F6690]/20'
+    VIEWER: 'text-[#2F6690] bg-[#2F6690]/10 border-[#2F6690]/20',
+    ADMIN: 'text-purple-500 bg-purple-500/10 border-purple-500/20'
   };
 
   const roleText = {
     PROJECT_MANAGER: 'Project Manager',
-    VIEWER: 'Observer / Viewer'
+    VIEWER: 'Observer / Viewer',
+    ADMIN: 'User Admin'
   };
 
   return (
@@ -152,17 +159,19 @@ function App() {
           {/* Navigation Links list */}
           <nav className="p-3 space-y-1.5">
             {/* Dashboard / Workspaces */}
-            <button 
-              onClick={() => handleSidebarNav('dashboard')}
-              className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
-                currentPage === 'dashboard' 
-                  ? 'bg-[#2F6690] text-white shadow-sm' 
-                  : 'text-slate-300 hover:text-white border border-transparent hover:bg-white/5'
-              }`}
-            >
-              <LayoutGrid size={15} className="flex-shrink-0" />
-              {!sidebarCollapsed && <span>Dashboard</span>}
-            </button>
+            {user.role !== 'ADMIN' && (
+              <button 
+                onClick={() => handleSidebarNav('dashboard')}
+                className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
+                  currentPage === 'dashboard' 
+                    ? 'bg-[#2F6690] text-white shadow-sm' 
+                    : 'text-slate-300 hover:text-white border border-transparent hover:bg-white/5'
+                }`}
+              >
+                <LayoutGrid size={15} className="flex-shrink-0" />
+                {!sidebarCollapsed && <span>Dashboard</span>}
+              </button>
+            )}
 
             {/* Templates (PROJECT_MANAGER only) */}
             {user.role === 'PROJECT_MANAGER' && (
@@ -180,60 +189,83 @@ function App() {
             )}
 
             {/* Projects */}
-            <button 
-              onClick={() => handleSidebarNav('projects')}
-              className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
-                currentPage === 'projects' || currentPage === 'workspace' 
-                  ? 'bg-[#2F6690] text-white shadow-sm' 
-                  : 'text-slate-300 hover:text-white border border-transparent hover:bg-white/5'
-              }`}
-            >
-              <Anchor size={15} className={`flex-shrink-0 ${currentPage === 'projects' || currentPage === 'workspace' ? 'text-white' : 'text-slate-400'}`} />
-              {!sidebarCollapsed && <span>Projects</span>}
-            </button>
+            {user.role !== 'ADMIN' && (
+              <button 
+                onClick={() => handleSidebarNav('projects')}
+                className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
+                  currentPage === 'projects' || currentPage === 'workspace' 
+                    ? 'bg-[#2F6690] text-white shadow-sm' 
+                    : 'text-slate-300 hover:text-white border border-transparent hover:bg-white/5'
+                }`}
+              >
+                <Anchor size={15} className={`flex-shrink-0 ${currentPage === 'projects' || currentPage === 'workspace' ? 'text-white' : 'text-slate-400'}`} />
+                {!sidebarCollapsed && <span>Projects</span>}
+              </button>
+            )}
 
             {/* Documents */}
-            <button 
-              onClick={() => handleSidebarNav('documents')}
-              className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
-                currentPage === 'documents' 
-                  ? 'bg-[#2F6690] text-white shadow-sm' 
-                  : 'text-slate-300 hover:text-white border border-transparent hover:bg-white/5'
-              }`}
-            >
-              <FolderOpen size={15} className="flex-shrink-0" />
-              {!sidebarCollapsed && <span>Documents</span>}
-            </button>
+            {user.role !== 'ADMIN' && (
+              <button 
+                onClick={() => handleSidebarNav('documents')}
+                className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
+                  currentPage === 'documents' 
+                    ? 'bg-[#2F6690] text-white shadow-sm' 
+                    : 'text-slate-300 hover:text-white border border-transparent hover:bg-white/5'
+                }`}
+              >
+                <FolderOpen size={15} className="flex-shrink-0" />
+                {!sidebarCollapsed && <span>Documents</span>}
+              </button>
+            )}
 
             {/* Reports */}
-            <button 
-              onClick={() => handleSidebarNav('reports')}
-              className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
-                currentPage === 'reports' 
-                  ? 'bg-[#2F6690] text-white shadow-sm' 
-                  : 'text-slate-300 hover:text-white border border-transparent hover:bg-white/5'
-              }`}
-            >
-              <FileText size={15} className="flex-shrink-0" />
-              {!sidebarCollapsed && <span>Reports</span>}
-            </button>
+            {user.role !== 'ADMIN' && (
+              <button 
+                onClick={() => handleSidebarNav('reports')}
+                className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
+                  currentPage === 'reports' 
+                    ? 'bg-[#2F6690] text-white shadow-sm' 
+                    : 'text-slate-300 hover:text-white border border-transparent hover:bg-white/5'
+                }`}
+              >
+                <FileText size={15} className="flex-shrink-0" />
+                {!sidebarCollapsed && <span>Reports</span>}
+              </button>
+            )}
 
             {/* Comments & Reviews / Reviews & Suggestions */}
-            <button 
-              onClick={() => handleSidebarNav('reviews')}
-              className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
-                currentPage === 'reviews' 
-                  ? 'bg-[#2F6690] text-white shadow-sm' 
-                  : 'text-slate-300 hover:text-white border border-transparent hover:bg-white/5'
-              }`}
-            >
-              <MessageSquare size={15} className="flex-shrink-0" />
-              {!sidebarCollapsed && (
-                <span>
-                  {user.role === 'PROJECT_MANAGER' ? 'Comments & Reviews' : 'Reviews & Suggestions'}
-                </span>
-              )}
-            </button>
+            {user.role !== 'ADMIN' && (
+              <button 
+                onClick={() => handleSidebarNav('reviews')}
+                className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
+                  currentPage === 'reviews' 
+                    ? 'bg-[#2F6690] text-white shadow-sm' 
+                    : 'text-slate-300 hover:text-white border border-transparent hover:bg-white/5'
+                }`}
+              >
+                <MessageSquare size={15} className="flex-shrink-0" />
+                {!sidebarCollapsed && (
+                  <span>
+                    {user.role === 'PROJECT_MANAGER' ? 'Comments & Reviews' : 'Reviews & Suggestions'}
+                  </span>
+                )}
+              </button>
+            )}
+
+            {/* User Management (PROJECT_MANAGER and ADMIN only) */}
+            {(user.role === 'PROJECT_MANAGER' || user.role === 'ADMIN') && (
+              <button 
+                onClick={() => handleSidebarNav('users')}
+                className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
+                  currentPage === 'users' 
+                    ? 'bg-[#2F6690] text-white shadow-sm' 
+                    : 'text-slate-300 hover:text-white border border-transparent hover:bg-white/5'
+                }`}
+              >
+                <Users size={15} className="flex-shrink-0" />
+                {!sidebarCollapsed && <span>User Management</span>}
+              </button>
+            )}
           </nav>
         </div>
 
@@ -357,6 +389,7 @@ function App() {
           {currentPage === 'reports' && <ReportsPage />}
           {currentPage === 'reviews' && <ReviewsPage />}
           {currentPage === 'templates' && user.role === 'PROJECT_MANAGER' && <TemplatesPage />}
+          {currentPage === 'users' && (user.role === 'PROJECT_MANAGER' || user.role === 'ADMIN') && <UsersPage />}
         </main>
       </div>
       

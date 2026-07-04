@@ -20,8 +20,8 @@ export const createUser = async (req, res) => {
       return res.status(400).json({ message: 'User with this email already exists' });
     }
 
-    if (role && !['PROJECT_MANAGER', 'VIEWER'].includes(role)) {
-      return res.status(400).json({ message: 'Invalid role. Must be PROJECT_MANAGER or VIEWER.' });
+    if (role && !['PROJECT_MANAGER', 'VIEWER', 'ADMIN'].includes(role)) {
+      return res.status(400).json({ message: 'Invalid role. Must be PROJECT_MANAGER, VIEWER, or ADMIN.' });
     }
 
     const user = await User.create({
@@ -65,8 +65,8 @@ export const updateUser = async (req, res) => {
       user.email = email;
     }
 
-    if (role && !['PROJECT_MANAGER', 'VIEWER'].includes(role)) {
-      return res.status(400).json({ message: 'Invalid role. Must be PROJECT_MANAGER or VIEWER.' });
+    if (role && !['PROJECT_MANAGER', 'VIEWER', 'ADMIN'].includes(role)) {
+      return res.status(400).json({ message: 'Invalid role. Must be PROJECT_MANAGER, VIEWER, or ADMIN.' });
     }
 
     if (name !== undefined) user.name = name;
@@ -101,7 +101,7 @@ export const deleteUser = async (req, res) => {
     }
 
     // Prevent deleting the main Project Manager sandbox account
-    if (user.email === 'admin@navalpmis.gov') {
+    if (user.email === 'akshat@gov.in') {
       return res.status(403).json({ message: 'Cannot delete the main Project Manager sandbox account' });
     }
 
