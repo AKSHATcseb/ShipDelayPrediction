@@ -11,12 +11,35 @@ import ReportsPage from './pages/ReportsPage.jsx';
 import ReviewsPage from './pages/ReviewsPage.jsx';
 import ProjectsPage from './pages/ProjectsPage.jsx';
 import DocumentsPage from './pages/DocumentsPage.jsx';
+import CalendarPage from './pages/CalendarPage.jsx';
 
 import { 
-  LogOut, LayoutGrid, Bell, Menu, Users, ClipboardList, 
+  LogOut, LayoutGrid, Bell, Menu, Users, ClipboardList, Calendar,
   ChevronLeft, ChevronRight, Anchor, ShieldAlert, FileText, MessageSquare, FolderOpen, X
 } from 'lucide-react';
 import NotificationCenter from './components/NotificationCenter.jsx';
+
+function AccessDenied({ onGoHome }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center bg-slate-950 text-white p-6 min-h-[500px]">
+      <div className="bg-red-500/5 border border-red-500/20 p-8 rounded-2xl flex flex-col items-center space-y-4 max-w-md text-center shadow-xl animate-in fade-in zoom-in-95 duration-200">
+        <div className="h-14 w-14 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-500">
+          <ShieldAlert size={28} className="animate-pulse" />
+        </div>
+        <h2 className="text-sm font-black uppercase tracking-widest text-red-500 font-outfit">Access Denied</h2>
+        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider leading-relaxed">
+          You do not have the authorization credentials required to enter this page. This action has been logged.
+        </p>
+        <button
+          onClick={onGoHome}
+          className="px-4 py-2 bg-slate-900 hover:bg-[#C62828]/10 border border-slate-800 hover:border-[#C62828]/25 text-white hover:text-[#C62828] rounded-xl text-[9px] font-black uppercase tracking-wider transition-all shadow-sm cursor-pointer"
+        >
+          Return to Dashboard
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function App() {
   const { isAuthenticated, loading, logout, user } = useAuth();
@@ -203,6 +226,21 @@ function App() {
               </button>
             )}
 
+            {/* Project Calendar */}
+            {user.role !== 'ADMIN' && (
+              <button 
+                onClick={() => handleSidebarNav('calendar')}
+                className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
+                  currentPage === 'calendar' 
+                    ? 'bg-[#2F6690] text-white shadow-sm' 
+                    : 'text-slate-300 hover:text-white border border-transparent hover:bg-white/5'
+                }`}
+              >
+                <Calendar size={15} className="flex-shrink-0" />
+                {!sidebarCollapsed && <span>Project Calendar</span>}
+              </button>
+            )}
+
             {/* Documents */}
             {user.role !== 'ADMIN' && (
               <button 
@@ -252,8 +290,8 @@ function App() {
               </button>
             )}
 
-            {/* User Management (PROJECT_MANAGER and ADMIN only) */}
-            {(user.role === 'PROJECT_MANAGER' || user.role === 'ADMIN') && (
+            {/* User Management (ADMIN only) */}
+            {user.role === 'ADMIN' && (
               <button 
                 onClick={() => handleSidebarNav('users')}
                 className={`w-full px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all duration-150 flex items-center gap-3 ${
@@ -323,6 +361,7 @@ function App() {
               <span className="text-[#12355B] font-extrabold uppercase tracking-wider text-[10px]">
                 {currentPage === 'dashboard' ? 'Dashboard' : 
                  currentPage === 'projects' ? 'Projects' : 
+                 currentPage === 'calendar' ? 'Project Calendar' : 
                  currentPage === 'workspace' ? 'Workspace' : 
                  currentPage === 'documents' ? 'Documents' : 
                  currentPage === 'reports' ? 'Reports' : 
@@ -379,6 +418,11 @@ function App() {
               onSelectProject={navigateToProject} 
             />
           )}
+          {currentPage === 'calendar' && (
+            <CalendarPage 
+              onSelectProject={navigateToProject} 
+            />
+          )}
           {currentPage === 'workspace' && (
             <ProjectWorkspace 
               projectId={activeProjectId} 
@@ -388,8 +432,12 @@ function App() {
           {currentPage === 'documents' && <DocumentsPage />}
           {currentPage === 'reports' && <ReportsPage />}
           {currentPage === 'reviews' && <ReviewsPage />}
-          {currentPage === 'templates' && user.role === 'PROJECT_MANAGER' && <TemplatesPage />}
-          {currentPage === 'users' && (user.role === 'PROJECT_MANAGER' || user.role === 'ADMIN') && <UsersPage />}
+          {currentPage === 'templates' && (
+            user.role === 'PROJECT_MANAGER' ? <TemplatesPage /> : <AccessDenied onGoHome={navigateToDashboard} />
+          )}
+          {currentPage === 'users' && (
+            user.role === 'ADMIN' ? <UsersPage /> : <AccessDenied onGoHome={navigateToDashboard} />
+          )}
         </main>
       </div>
       

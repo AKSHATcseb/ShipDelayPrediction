@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { 
   FolderKanban, Plus, Clock, ShieldAlert, DollarSign, 
   AlertTriangle, CheckCircle2, ChevronRight, Calendar,
-  ArrowRight, Sparkles, AlertCircle
+  ArrowRight, Sparkles, AlertCircle, Flag
 } from 'lucide-react';
 
 function Dashboard({ onSelectProject, onNavigate }) {
@@ -30,6 +30,7 @@ function Dashboard({ onSelectProject, onNavigate }) {
 
   // PM specific metrics
   const [myTasks, setMyTasks] = useState([]);
+  const [calendarEvents, setCalendarEvents] = useState([]);
 
   const fetchData = async () => {
     try {
@@ -69,6 +70,14 @@ function Dashboard({ onSelectProject, onNavigate }) {
         }
         // Sort tasks by sequence/urgency and limit
         setMyTasks(pendingTasks.slice(0, 5));
+      }
+
+      // 4. Fetch Calendar Events
+      try {
+        const calendarRes = await api.get('/calendar');
+        setCalendarEvents(calendarRes.data);
+      } catch (e) {
+        console.error('Failed to fetch calendar events', e);
       }
 
     } catch (err) {
@@ -130,6 +139,57 @@ function Dashboard({ onSelectProject, onNavigate }) {
   const averageDelay = projects.reduce((acc, p) => acc + (p.predictedDelayMonths || 0), 0) / (totalProjects || 1);
   const totalCost = projects.reduce((acc, p) => acc + (p.projectCost || 0), 0);
   const criticalRiskProjects = projects.filter(p => ['High', 'Critical'].includes(p.predictedRiskCategory)).length;
+
+  // Calendar Events Calculations
+  const formatDateLocal = (dateVal) => {
+    if (!dateVal) return '';
+    if (typeof dateVal === 'string') {
+      const match = dateVal.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (match) {
+        return `${match[1]}-${match[2]}-${match[3]}`;
+      }
+    }
+    try {
+      const d = new Date(dateVal);
+      if (isNaN(d.getTime())) return '';
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    } catch (e) {
+      return '';
+    }
+  };
+
+  const todayStr = formatDateLocal(new Date());
+  const eventsList = Array.isArray(calendarEvents) ? calendarEvents : [];
+
+  const todayEvents = eventsList.filter(ev => {
+    if (!ev || !ev.start) return false;
+    const startStr = formatDateLocal(ev.start);
+    const endStr = formatDateLocal(ev.end || ev.start);
+    return startStr && endStr && todayStr >= startStr && todayStr <= endStr;
+  });
+
+  const nextWeek = new Date();
+  nextWeek.setDate(nextWeek.getDate() + 7);
+  const upcomingDeadlines = eventsList.filter(ev => {
+    if (!ev || !ev.start) return false;
+    const d = new Date(ev.start);
+    if (isNaN(d.getTime())) return false;
+    return (ev.category === 'Deadline' || (ev.title && ev.title.includes('[End]'))) && d >= new Date() && d <= nextWeek;
+  });
+
+  const nextMonth = new Date();
+  nextMonth.setDate(nextMonth.getDate() + 30);
+  const upcomingMilestones = eventsList.filter(ev => {
+    if (!ev || !ev.start) return false;
+    const d = new Date(ev.start);
+    if (isNaN(d.getTime())) return false;
+    return ev.category === 'Milestone' && d >= new Date() && d <= nextMonth;
+  });
+
+  console.log('Dashboard widgets state:', { todayEvents, upcomingDeadlines, upcomingMilestones });
 
   return (
     <div className="flex-1 p-6 md:p-8 space-y-8 overflow-y-auto bg-[#F7F9FC] flex flex-col min-h-0 engineering-grid">
@@ -305,6 +365,103 @@ function Dashboard({ onSelectProject, onNavigate }) {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* CALENDAR & SCHEDULING INTERACTIVE WIDGETS */}
+      {user.role !== 'ADMIN' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-200">
+          
+          {/* Widget 1: Today's Events */}
+          <div className="bg-white border border-[#D6DEE8] p-5 rounded-2xl shadow-sm space-y-4 flex flex-col justify-between min-h-[220px]">
+            <div>
+              <h3 className="text-xs font-black text-[#12355B] uppercase tracking-wider flex items-center gap-1.5">
+                <Calendar size={14} className="text-[#2F6690]" />
+                Today's Schedule
+              </h3>
+              <p className="text-[10px] text-slate-400 font-semibold">Events happening today</p>
+              
+              <div className="mt-3 space-y-2 max-h-[120px] overflow-y-auto">
+                {todayEvents.length === 0 ? (
+                  <p className="text-[10px] text-slate-400 italic py-4">No events scheduled for today.</p>
+                ) : (
+                  todayEvents.map((ev, idx) => (
+                    <div key={idx} className="bg-slate-50 border border-slate-150 p-2 rounded-xl flex items-center justify-between text-[10px] font-bold text-slate-700">
+                      <span className="truncate max-w-[150px]">{ev.title}</span>
+                      <span className="text-[8px] text-slate-400 font-black uppercase">{ev.category}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <button 
+              onClick={() => onNavigate('calendar')} 
+              className="w-full mt-2 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-[10px] font-extrabold text-[#2F6690] uppercase tracking-wider text-center transition-all"
+            >
+              Open Full Calendar
+            </button>
+          </div>
+
+          {/* Widget 2: Upcoming Deadlines */}
+          <div className="bg-white border border-[#D6DEE8] p-5 rounded-2xl shadow-sm space-y-4 flex flex-col justify-between min-h-[220px]">
+            <div>
+              <h3 className="text-xs font-black text-[#C62828] uppercase tracking-wider flex items-center gap-1.5">
+                <AlertCircle size={14} />
+                Upcoming Deadlines (7 Days)
+              </h3>
+              <p className="text-[10px] text-slate-400 font-semibold">Deadlines & Handover dates</p>
+              
+              <div className="mt-3 space-y-2 max-h-[120px] overflow-y-auto">
+                {upcomingDeadlines.length === 0 ? (
+                  <p className="text-[10px] text-slate-400 italic py-4">No upcoming deadlines.</p>
+                ) : (
+                  upcomingDeadlines.map((ev, idx) => (
+                    <div key={idx} className="bg-red-50/50 border border-red-150 p-2 rounded-xl flex items-center justify-between text-[10px] font-bold text-red-750">
+                      <span className="truncate max-w-[150px]">{ev.title}</span>
+                      <span className="text-[8px] text-red-500 font-black">{new Date(ev.start).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <button 
+              onClick={() => onNavigate('calendar')} 
+              className="w-full mt-2 py-1.5 bg-red-50/50 hover:bg-red-100/50 border border-red-100 rounded-xl text-[10px] font-extrabold text-[#C62828] uppercase tracking-wider text-center transition-all"
+            >
+              View Deadlines
+            </button>
+          </div>
+
+          {/* Widget 3: Upcoming Milestones */}
+          <div className="bg-white border border-[#D6DEE8] p-5 rounded-2xl shadow-sm space-y-4 flex flex-col justify-between min-h-[220px]">
+            <div>
+              <h3 className="text-xs font-black text-[#D97706] uppercase tracking-wider flex items-center gap-1.5">
+                <Flag size={14} />
+                Program Milestones (30 Days)
+              </h3>
+              <p className="text-[10px] text-slate-400 font-semibold">Upcoming milestones</p>
+              
+              <div className="mt-3 space-y-2 max-h-[120px] overflow-y-auto">
+                {upcomingMilestones.length === 0 ? (
+                  <p className="text-[10px] text-slate-400 italic py-4">No milestones scheduled.</p>
+                ) : (
+                  upcomingMilestones.map((ev, idx) => (
+                    <div key={idx} className="bg-[#D97706]/10 border border-[#D97706]/20 p-2 rounded-xl flex items-center justify-between text-[10px] font-bold text-[#D97706]">
+                      <span className="truncate max-w-[150px]">{ev.title}</span>
+                      <span className="text-[8px] text-[#D97706] font-black">{new Date(ev.start).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <button 
+              onClick={() => onNavigate('calendar')} 
+              className="w-full mt-2 py-1.5 bg-[#D97706]/10 hover:bg-[#D97706]/20 border border-[#D97706]/20 rounded-xl text-[10px] font-extrabold text-[#D97706] uppercase tracking-wider text-center transition-all"
+            >
+              Check Milestones
+            </button>
+          </div>
+
         </div>
       )}
 

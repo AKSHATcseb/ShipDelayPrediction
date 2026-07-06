@@ -14,6 +14,9 @@ import documentRoutes from './routes/documentRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import templateRoutes from './routes/templateRoutes.js';
 import userRoutes from './routes/userRoutes.js';
+import calendarRoutes from './routes/calendarRoutes.js';
+import milestoneRoutes from './routes/milestoneRoutes.js';
+import reminderRoutes from './routes/reminderRoutes.js';
 
 // Socket Handler
 import socketHandler from './socket/socketHandler.js';
@@ -55,6 +58,9 @@ app.use('/api/documents', documentRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/calendar', calendarRoutes);
+app.use('/api/milestones', milestoneRoutes);
+app.use('/api/reminders', reminderRoutes);
 
 // Fallback Route
 app.get('/', (req, res) => {
@@ -128,9 +134,13 @@ const seedDefaultUsers = async () => {
 // Initialize Sockets
 socketHandler(io);
 
+// Start background reminder scheduler
+import { startReminderScheduler } from './services/reminderScheduler.js';
+
 // Start server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, async () => {
   console.log(`Server listening in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
   await seedDefaultUsers();
+  startReminderScheduler();
 });

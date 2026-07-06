@@ -10,7 +10,8 @@ import GanttChart from '../components/GanttChart.jsx';
 import CommentsSection from '../components/CommentsSection.jsx';
 import DocumentManager from '../components/DocumentManager.jsx';
 import WorkflowCanvas from '../components/WorkflowCanvas.jsx';
-import { ArrowLeft, Users, Calendar, FolderKanban, MessageSquare, FileText, Shield, UserPlus, Table, GitFork } from 'lucide-react';
+import CalendarPage from './CalendarPage.jsx';
+import { ArrowLeft, Users, Calendar, FolderKanban, MessageSquare, FileText, Shield, UserPlus, Table, GitFork, CalendarDays } from 'lucide-react';
 
 function ProjectWorkspace({ projectId, onBack }) {
   const [project, setProject] = useState(null);
@@ -275,8 +276,15 @@ function ProjectWorkspace({ projectId, onBack }) {
           onClick={() => setActiveTab('gantt')}
           className={`px-4 py-2 text-xs font-bold transition-all border-b-2 flex items-center gap-1.5 -mb-[1px] ${activeTab === 'gantt' ? 'border-[#12355B] text-[#12355B]' : 'border-transparent text-slate-500 hover:text-[#2F6690]'}`}
         >
-          <Calendar size={13} />
+          <Table size={13} />
           Gantt & Schedule
+        </button>
+        <button 
+          onClick={() => setActiveTab('calendar')}
+          className={`px-4 py-2 text-xs font-bold transition-all border-b-2 flex items-center gap-1.5 -mb-[1px] ${activeTab === 'calendar' ? 'border-[#12355B] text-[#12355B]' : 'border-transparent text-slate-500 hover:text-[#2F6690]'}`}
+        >
+          <CalendarDays size={13} />
+          Interactive Calendar
         </button>
         <button 
           onClick={() => setActiveTab('workflow')}
@@ -321,7 +329,15 @@ function ProjectWorkspace({ projectId, onBack }) {
         )}
 
         {activeTab === 'gantt' && (
-          <GanttChart project={project} activities={activities} />
+          <GanttChart project={project} activities={activities} onEditActivity={setSelectedActivity} />
+        )}
+
+        {activeTab === 'calendar' && (
+          <CalendarPage 
+            onSelectProject={() => {}} 
+            defaultProjectFilter={projectId}
+            isWorkspaceMode={true}
+          />
         )}
 
         {activeTab === 'workflow' && (
