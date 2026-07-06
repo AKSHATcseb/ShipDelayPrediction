@@ -1525,5 +1525,48 @@ To deploy the full multi-service container stack, use Docker Compose:
    ```
 4. Access the web dashboard at `http://localhost:8000`.
 
+### Standalone Executable Deployment (Windows Offline Bundle)
+For isolated offline deployments (such as air-gapped environments or local PC workstations without Docker or Python runtime pre-requisites), the application can be compiled and packaged into a self-contained folder structure.
+
+#### 1. Compile the Standalone Bundle
+Run the packaging automation pipeline from the project root:
+```bash
+python package_app.py
+```
+This automated pipeline executes the following stages:
+* **Frontend Compilation**: Compiles the React SPA assets to static HTML/JS (`npm run build` in `/frontend`).
+* **Python Backend Packaging**: Uses PyInstaller to compile the FastAPI server (`run_server.py`) into a folder (`--onedir`) containing the python runtime, libraries (FastAPI, SQLAlchemy, XGBoost, etc.), and static server folders.
+* **Launcher Compilation**: Compiles `launcher.py` into a single-file executable (`Launch-PMIS.exe`, `--onefile`).
+* **Offline Dependencies**: Copies pre-installed `node.exe` and `mongod.exe` binaries into the distribution target.
+* **Assembly**: Consolidates all built executables, trained machine learning models, database initialization folders, and configuration presets into a single relocatable directory (`Navy-PMIS-Distribution`).
+
+#### 2. Directory Structure of Standalone Bundle
+The generated `Navy-PMIS-Distribution` folder has the following layout:
+```text
+Navy-PMIS-Distribution/
+├── Launch-PMIS.exe           # Main launcher binary (boots all backend services)
+├── bin/                      # Pre-compiled services and binary engines
+│   ├── run_server.exe        # Compiled FastAPI server
+│   ├── node.exe              # Standalone Node.js engine
+│   ├── mongod.exe            # Standalone MongoDB database engine
+│   ├── collab-backend/       # Collaboration service codebase (JavaScript)
+│   └── static/               # Bundled frontend React SPA assets
+├── database/                 # Portable database storage (SQLite + MongoDB oplogs)
+├── models/                   # Bundled trained ML prediction models (joblib pkl)
+├── data/                     # Offline datasets
+└── plots/                    # Validation and evaluation plots
+```
+
+#### 3. Run the Standalone Application
+1. Copy or extract the `Navy-PMIS-Distribution` folder onto any offline Windows workstation.
+2. Double-click **`Launch-PMIS.exe`** in the root folder.
+3. The launcher will automatically:
+   * Setup portable SQLite and MongoDB database directories.
+   * Boot the MongoDB instance on port `27017` and the Node.js service on port `5000`.
+   * Boot the Python ML prediction service on port `8000`.
+   * Launch the system default web browser pointing to `http://localhost:8000`.
+4. Close the console window to cleanly terminate all background database and backend server services.
+
 ---
 *END OF REPORT - RESTRICTED DISTRIBUTION*
+

@@ -33,11 +33,11 @@ def main():
     pyinstaller_bin = os.path.join(BASE_DIR, '.venv', 'Scripts', 'pyinstaller.exe')
     
     # We build run_server.py as a directory (--onedir) so we can place other binaries beside it easily
-    run_cmd(f'"{pyinstaller_bin}" --onedir --clean --name run_server --distpath dist run_server.py', cwd=BASE_DIR)
+    run_cmd(f'"{pyinstaller_bin}" --onedir --noconfirm --clean --name run_server --distpath dist run_server.py', cwd=BASE_DIR)
 
     # 4. Compile Launcher script with PyInstaller
     print("[*] Compiling launcher...")
-    run_cmd(f'"{pyinstaller_bin}" --onefile --clean --name Launch-PMIS --distpath dist_launcher launcher.py', cwd=BASE_DIR)
+    run_cmd(f'"{pyinstaller_bin}" --onefile --noconfirm --clean --name Launch-PMIS --distpath dist_launcher launcher.py', cwd=BASE_DIR)
 
     # 5. Assemble Distribution Folder
     print("[*] Assembling distribution folder...")
@@ -82,7 +82,7 @@ def main():
     shutil.copytree(
         os.path.join(BASE_DIR, 'collab-backend'), 
         collab_target, 
-        ignore=shutil.ignore_patterns('.git', 'dist', 'src/test_pkg.exe', 'src/inspect_mongo.js', 'src/inspect_oplog.js', 'src/delete_target_projects.js', 'src/migrateSqliteJson.js.backup'),
+        ignore=shutil.ignore_patterns('.git', 'src/test_pkg.exe', 'src/inspect_mongo.js', 'src/inspect_oplog.js', 'src/delete_target_projects.js', 'src/migrateSqliteJson.js.backup'),
         dirs_exist_ok=True
     )
 

@@ -28,7 +28,7 @@ PLOTS_DIR = BASE_DIR / "plots"
 DATABASE_DIR = BASE_DIR / "database"
 
 # CORS
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000,http://localhost:8000").split(",")
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000,http://localhost:8000,http://127.0.0.1:5173,http://127.0.0.1:3000,http://127.0.0.1:8000").split(",")
 
 # Server
 HOST = os.getenv("HOST", "0.0.0.0")

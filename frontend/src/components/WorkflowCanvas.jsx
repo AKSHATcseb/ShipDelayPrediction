@@ -19,6 +19,7 @@ import {
   Calendar, Clock, ShieldAlert, Award, User, Tag 
 } from 'lucide-react';
 import dagre from 'dagre';
+import { toPng } from 'html-to-image';
 
 // 1. Custom Node Components
 
@@ -315,37 +316,73 @@ function WorkflowCanvasInner({ nodes: initialNodes, edges: initialEdges, onClose
 
   // Export as PNG
   const exportAsPng = () => {
-    const svgElement = document.querySelector('.react-flow__renderer svg');
-    if (!svgElement) return alert('SVG element not found.');
+    const element = document.querySelector('.react-flow');
+    if (!element) return alert('React Flow element not found.');
 
-    const svgString = new XMLSerializer().serializeToString(svgElement);
-    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
-    const URL = window.URL || window.webkitURL || window;
-    const blobURL = URL.createObjectURL(svgBlob);
-    
-    const image = new Image();
-    image.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = svgElement.clientWidth || 1400;
-      canvas.height = svgElement.clientHeight || 900;
-      const context = canvas.getContext('2d');
-      context.fillStyle = '#FFFFFF';
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(image, 0, 0);
-      
-      const pngURL = canvas.toDataURL('image/png');
-      const downloadLink = document.createElement('a');
-      downloadLink.href = pngURL;
-      downloadLink.download = 'PMIS_Workflow_Flowchart.png';
-      document.body.appendChild(downloadLink);
-      downloadLink.click();
-      document.body.removeChild(downloadLink);
-    };
-    image.src = blobURL;
+    toPng(element, {
+      backgroundColor: '#ffffff',
+      filter: (node) => {
+        if (
+          node.classList?.contains('react-flow__controls') ||
+          node.classList?.contains('react-flow__panel') ||
+          node.classList?.contains('react-flow__minimap')
+        ) {
+          return false;
+        }
+        return true;
+      }
+    })
+      .then((dataUrl) => {
+        const link = document.createElement('a');
+        link.download = 'PMIS_Workflow_Flowchart.png';
+        link.href = dataUrl;
+        link.click();
+      })
+      .catch((error) => {
+        console.error('Failed to export workflow diagram as PNG:', error);
+      });
   };
 
   const exportAsPdf = () => {
-    window.print();
+    const element = document.querySelector('.react-flow');
+    if (!element) return alert('React Flow element not found.');
+
+    toPng(element, {
+      backgroundColor: '#ffffff',
+      filter: (node) => {
+        if (
+          node.classList?.contains('react-flow__controls') ||
+          node.classList?.contains('react-flow__panel') ||
+          node.classList?.contains('react-flow__minimap')
+        ) {
+          return false;
+        }
+        return true;
+      }
+    })
+      .then((dataUrl) => {
+        const printWindow = window.open('', '_blank');
+        if (!printWindow) return alert('Pop-up blocked. Please allow pop-ups to print PDF.');
+        printWindow.document.write(`
+          <html>
+            <head>
+              <title>PMIS Workflow Diagram</title>
+              <style>
+                body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background: #ffffff; }
+                img { max-width: 100%; max-height: 100%; object-fit: contain; }
+                @page { size: landscape; margin: 0; }
+              </style>
+            </head>
+            <body>
+              <img src="${dataUrl}" onload="setTimeout(() => { window.print(); window.close(); }, 500);" />
+            </body>
+          </html>
+        `);
+        printWindow.document.close();
+      })
+      .catch((error) => {
+        console.error('Failed to export workflow diagram as PDF:', error);
+      });
   };
 
   return (

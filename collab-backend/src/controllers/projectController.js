@@ -300,7 +300,7 @@ export const getProjectPdfReport = async (req, res) => {
     const { projectId } = req.params;
     const state = await getProjectStateJson(projectId);
 
-    const pythonServiceUrl = process.env.PYTHON_ML_SERVICE_URL || 'http://localhost:8000';
+    const pythonServiceUrl = process.env.PYTHON_ML_SERVICE_URL || 'http://127.0.0.1:8000';
     const response = await fetch(`${pythonServiceUrl}/api/reports/generate/pdf`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -328,7 +328,7 @@ export const getProjectExcelReport = async (req, res) => {
     const { projectId } = req.params;
     const state = await getProjectStateJson(projectId);
 
-    const pythonServiceUrl = process.env.PYTHON_ML_SERVICE_URL || 'http://localhost:8000';
+    const pythonServiceUrl = process.env.PYTHON_ML_SERVICE_URL || 'http://127.0.0.1:8000';
     const response = await fetch(`${pythonServiceUrl}/api/reports/generate/excel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

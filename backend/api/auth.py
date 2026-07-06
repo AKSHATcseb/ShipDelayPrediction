@@ -133,7 +133,7 @@ def register_user(request: UserCreate, admin=Depends(require_admin), db: Session
     try:
         # Both ProjectManager and Viewer get User globalRole in collab server
         global_role = "User"
-        url = "http://localhost:5000/api/auth/register"
+        url = "http://127.0.0.1:5000/api/auth/register"
         payload = {
             "name": request.full_name or request.username.capitalize(),
             "email": request.email or f"{request.username}@navalpmis.gov",

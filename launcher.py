@@ -80,7 +80,7 @@ def start_services():
         time.sleep(3)
 
         # 4. Open default web browser
-        url = "http://localhost:8000"
+        url = "http://127.0.0.1:8000"
         print(f"[*] Launching browser at {url}...")
         webbrowser.open(url)
 
